@@ -1,0 +1,1 @@
+Placeholder for Phase 3 (Betting vertical). The mock bill provider is shared infrastructure under `app/Domain/Bills` and `app/Domain/Providers`; betting-specific products, staking limits, and settlement flows land here in Phase 3.

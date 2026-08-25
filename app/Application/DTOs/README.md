@@ -1,0 +1,1 @@
+Data Transfer Objects shared between application services and controllers. Phase 1–2 services pass domain models and small arrays; structured DTOs (e.g. `CreateTransactionDTO`, `BillQuoteDTO`) land here as the public API surface stabilises.
