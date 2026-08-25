@@ -1,0 +1,1 @@
+S3-compatible object storage adapters (KYC document uploads, receipts, reconciliation exports). Phase 1–2 stores KYC documents in local storage under the `documents` disk (see `config/ase.php`); the S3 adapter lands here before launch per charter §18.

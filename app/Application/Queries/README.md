@@ -1,0 +1,1 @@
+Application queries (read models). Phase 1–2 reads go straight through resources; dedicated query handlers land here where reporting needs grow (e.g. transaction history pagination, statement exports).

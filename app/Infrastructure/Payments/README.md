@@ -1,0 +1,1 @@
+Adapters for external payment/rail integrations (bank transfer APIs, funding rails). Phase 1–2 uses the mock provider only; real provider adapters implement `Ase\Domain\Providers\Contracts\PaymentProvider` and register in `app/Domain/Providers/Services/ProviderFactory.php`.
