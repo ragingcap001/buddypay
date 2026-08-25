@@ -5,6 +5,9 @@ namespace App\Domain\Providers\Services;
 use App\Domain\Payments\DTOs\PaymentChargeRequest;
 use App\Domain\Payments\DTOs\PaymentChargeResponse;
 use App\Domain\Payments\DTOs\PaymentVerificationResponse;
+use App\Domain\Payments\DTOs\PayoutRequest;
+use App\Domain\Payments\DTOs\PayoutResponse;
+use App\Domain\Payments\DTOs\PayoutVerificationResponse;
 use App\Domain\Providers\DTOs\BillPurchaseRequest;
 use App\Domain\Providers\DTOs\BillPurchaseResponse;
 use App\Domain\Providers\DTOs\BillValidationRequest;
@@ -157,6 +160,51 @@ final class ProviderGateway
     {
         $this->providerModel($providerName);
         $provider = $this->factory->makePaymentProvider($providerName);
+
+        return $provider->verify($providerReference);
+    }
+
+    /**
+     * Initiate a wallet -> bank payout through a payout provider. Same
+     * audit/circuit-breaker/outcome-classification funnel as `charge()`.
+     */
+    public function payout(string $providerName, PayoutRequest $request, ?Transaction $transaction = null): PayoutResponse
+    {
+        $provider = $this->providerModel($providerName);
+
+        if (! $this->circuitBreaker->allowRequest($providerName)) {
+            throw new CircuitOpenException($providerName);
+        }
+
+        $startedAt = microtime(true);
+        $outcome = ProviderOutcome::Ambiguous;
+        $response = null;
+        $error = null;
+
+        try {
+            $payoutProvider = $this->factory->makePayoutProvider($providerName);
+
+            $response = $payoutProvider->payout($request);
+            $outcome = $response->outcome;
+        } catch (Throwable $e) {
+            $outcome = $this->classifier->classifyException($e);
+            $error = $e->getMessage();
+        }
+
+        $this->recordAttempt($provider, $transaction, 'PAYOUT', $outcome, $error, (int) ((microtime(true) - $startedAt) * 1000));
+        $this->updateCircuit($providerName, $outcome);
+
+        if ($response === null) {
+            return new PayoutResponse($outcome, null, $error ?? 'Payout provider call failed without a response');
+        }
+
+        return $response;
+    }
+
+    public function verifyPayout(string $providerName, string $providerReference): PayoutVerificationResponse
+    {
+        $this->providerModel($providerName);
+        $provider = $this->factory->makePayoutProvider($providerName);
 
         return $provider->verify($providerReference);
     }

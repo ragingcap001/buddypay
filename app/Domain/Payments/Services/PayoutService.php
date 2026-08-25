@@ -2,10 +2,10 @@
 
 namespace App\Domain\Payments\Services;
 
-use App\Application\Commands\FundWallet;
+use App\Application\Commands\InitiateBankTransfer;
 use App\Domain\Ledger\Constants\SystemAccounts;
 use App\Domain\Notifications\Services\OutboxService;
-use App\Domain\Payments\DTOs\PaymentChargeRequest;
+use App\Domain\Payments\DTOs\PayoutRequest;
 use App\Domain\Providers\Enums\ProviderOutcome;
 use App\Domain\Providers\Services\ProviderGateway;
 use App\Domain\Risk\Services\RiskEngine;
@@ -18,25 +18,29 @@ use App\Domain\Wallet\Services\WalletService;
 use App\Exceptions\FinancialException;
 use App\Models\Transaction;
 use App\Models\User;
+use App\Models\WalletReservation;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Orchestrates wallet funding through a payment provider:
+ * Orchestrates a wallet -> bank payout end to end:
  *
- *   1. idempotency begin
- *   2. risk assessment (wallet balance limit by KYC tier)
- *   3. ATOMIC initiation: transaction + outbox (no reservation — funds are
- *      not taken from the wallet, they are added to it)
- *   4. provider charge (outside the DB transaction)
- *   5. ATOMIC outcome:
- *        - DEFINITIVE_SUCCESS: credit wallet + post ledger
- *          (DR FUNDING_RECEIVABLE / CR customer wallet), COMPLETED
- *        - DEFINITIVE_FAILURE: FAILED
- *        - AMBIGUOUS:          VERIFYING — the wallet is NOT credited until
- *          the outcome is verified (POST /transactions/{ref}/verify or a
- *          provider webhook).
+ *   1. idempotency begin (replays return the original result)
+ *   2. risk assessment (KYC tier limits)
+ *   3. ATOMIC initiation: wallet reservation + transaction + outbox event
+ *   4. provider payout (outside the DB transaction — never hold locks while
+ *      waiting on an external provider)
+ *   5. ATOMIC outcome application:
+ *        - DEFINITIVE_SUCCESS: commit reservation (DR WALLET / CR
+ *          PROVIDER_PAYABLE + fee), COMPLETED
+ *        - DEFINITIVE_FAILURE: release reservation, FAILED
+ *        - AMBIGUOUS:          hold reservation, VERIFYING — the money stays
+ *          reserved until the provider confirms (webhook, /verify endpoint
+ *          or the stale-transaction sweeper). If the reservation TTL lapses
+ *          first, the expirer releases the funds back to the user and the
+ *          transaction is flagged by reconciliation.
+ *   6. idempotency complete
  */
-final class FundingService
+final class PayoutService
 {
     public function __construct(
         private readonly WalletService $wallets,
@@ -48,13 +52,15 @@ final class FundingService
     ) {
     }
 
-    public function execute(FundWallet $command): Transaction
+    public function execute(InitiateBankTransfer $command): Transaction
     {
         $user = User::findOrFail($command->userId);
 
-        $requestHash = $this->idempotency->hashRequest('POST', 'wallet/fund', [
+        $requestHash = $this->idempotency->hashRequest('POST', 'wallet/payout', [
             'amount' => $command->amountKobo,
-            'method' => $command->method,
+            'bank_code' => $command->bankCode,
+            'account_number' => $command->accountNumber,
+            'account_name' => $command->accountName,
         ], $user->id);
 
         $begun = $this->idempotency->begin($user->id, $command->idempotencyKey, $requestHash);
@@ -65,75 +71,70 @@ final class FundingService
 
         $idempotencyKey = $begun['idempotency'];
 
-        $fee = $this->transactions->calculateFee(TransactionType::WalletFunding, $command->amountKobo);
+        $fee = $this->transactions->calculateFee(TransactionType::BankTransfer, $command->amountKobo);
         $total = $command->amountKobo + $fee;
 
-        $this->risk->assess($user, TransactionType::WalletFunding, $total, increasesWalletBalance: true);
+        // Risk: blocks (with audit) before any funds are reserved.
+        $this->risk->assess($user, TransactionType::BankTransfer, $total);
 
-        // --- Atomic initiation --------------------------------------------
-        $transaction = DB::transaction(function () use ($user, $command, $fee, $total): Transaction {
+        $providerName = $this->resolveProvider($command->provider);
+
+        // --- Atomic initiation -------------------------------------------
+        $transaction = DB::transaction(function () use ($user, $command, $fee, $total, $providerName): Transaction {
+            $wallet = $this->wallets->forUser($user->id);
+            $reservation = $this->wallets->reserve($wallet, $total);
+
             $txn = $this->transactions->create([
                 'reference' => ReferenceGenerator::transaction(),
                 'user_id' => $user->id,
-                'type' => TransactionType::WalletFunding->value,
+                'type' => TransactionType::BankTransfer->value,
                 'status' => TransactionStatus::Initiated->value,
                 'amount' => $command->amountKobo,
                 'fee' => $fee,
                 'currency' => config('ase.base_currency', 'NGN'),
-                'metadata' => $command->metadata + ['method' => $command->method],
+                'metadata' => $command->metadata + [
+                    'bank_code' => $command->bankCode,
+                    'account_number' => $command->accountNumber,
+                    'account_name' => $command->accountName,
+                    'narration' => $command->narration,
+                    'provider' => $providerName,
+                ],
+                'reservation_id' => $reservation->id,
             ]);
 
-            $this->transactions->transition($txn, TransactionStatus::Pending, 'funding requested');
+            $this->transactions->transition($txn, TransactionStatus::Pending, 'transaction created');
             $this->transactions->transition($txn, TransactionStatus::Processing, 'provider dispatch');
 
             $this->outbox->record('transaction', $txn->id, 'transaction.processing', [
                 'reference' => $txn->reference,
-                'type' => TransactionType::WalletFunding->value,
+                'type' => TransactionType::BankTransfer->value,
                 'amount' => $command->amountKobo,
             ]);
 
             return $txn;
         });
 
-        // --- Provider charge (outside the DB transaction) ------------------
-        $providerName = $command->provider !== null && $command->provider !== ''
-            ? $command->provider
-            : (string) config('ase.default_funding_provider', 'mock');
-
-        $response = $this->gateway->charge(
+        // --- Provider payout (outside the DB transaction) -----------------
+        $response = $this->gateway->payout(
             $providerName,
-            new PaymentChargeRequest(
+            new PayoutRequest(
                 $providerName,
-                $total,
+                $transaction->amount,
+                $command->bankCode,
+                $command->accountNumber,
+                $command->accountName,
                 $transaction->reference,
-                $user->email,
-                [
-                    'method' => $command->method,
-                    'customer_name' => (string) $user->name,
-                    'customer_email' => (string) $user->email,
-                    'customer_phone' => (string) $user->phone,
-                ],
+                $command->narration,
             ),
             $transaction,
         );
 
-        // Async funding providers return customer-facing deposit
-        // instructions (virtual account number, checkout URL, ...) — persist
-        // them on the transaction so the API can show them and /verify knows
-        // which provider to ask.
-        if ($response->paymentDetails !== [] || $transaction->provider === null) {
-            $transaction->update([
-                'provider' => $providerName,
-                'metadata' => $transaction->metadata + ['payment_details' => $response->paymentDetails],
-            ]);
-        }
-
-        // --- Atomic outcome application ------------------------------------
+        // --- Atomic outcome application -----------------------------------
         $this->applyOutcome(
             $transaction->reference,
             $providerName,
-            $command->amountKobo,
-            $fee,
+            (int) $transaction->amount,
+            (int) $transaction->fee,
             $response->outcome,
             $response->providerReference,
             $response->errorMessage,
@@ -150,8 +151,8 @@ final class FundingService
     }
 
     /**
-     * Verify an ambiguous/verifying funding transaction against the
-     * provider. Safe to call repeatedly; idempotent on the provider side.
+     * Verify an ambiguous/verifying payout against the provider. Safe to
+     * call repeatedly; idempotent on the provider side.
      */
     public function verifyReference(Transaction $txn): Transaction
     {
@@ -175,11 +176,9 @@ final class FundingService
                 return $txn->fresh();
             }
 
-            // Verify against the provider that actually took the charge, not
-            // the platform default.
-            $providerName = (string) ($txn->provider ?? config('ase.default_funding_provider', 'mock'));
+            $providerName = (string) ($txn->provider ?? config('ase.default_payout_provider', 'wema'));
 
-            $response = $this->gateway->verifyCharge($providerName, $txn->provider_reference);
+            $response = $this->gateway->verifyPayout($providerName, $txn->provider_reference);
 
             $this->applyOutcome(
                 $txn->reference,
@@ -196,7 +195,7 @@ final class FundingService
     }
 
     /**
-     * Apply a provider outcome to a funding transaction. Called inside a
+     * Apply a provider outcome to a payout transaction. Called inside a
      * database transaction. Used by execute(), verifyReference() and
      * provider webhooks.
      */
@@ -211,56 +210,71 @@ final class FundingService
     ): void {
         DB::transaction(function () use ($transactionReference, $providerName, $amountKobo, $fee, $outcome, $providerReference, $error): void {
             $txn = $this->transactions->findByReference($transactionReference);
-
-            // Record which provider took the charge in every outcome — the
-            // verification path must always ask the right provider.
-            $txn->update([
-                'provider' => $providerName,
-                'provider_reference' => $providerReference ?? $txn->provider_reference,
-            ]);
+            $reservation = $txn->reservation_id !== null ? WalletReservation::find($txn->reservation_id) : null;
+            $reservationActive = $reservation !== null && $reservation->status === \App\Domain\Wallet\Enums\WalletReservationStatus::Active->value;
 
             if ($outcome === ProviderOutcome::DefinitiveSuccess) {
-                $wallet = $this->wallets->forUser((int) $txn->user_id);
+                if ($reservationActive) {
+                    // DR customer wallet (amount + fee)
+                    // CR provider payable (amount)
+                    // CR fee revenue (fee)
+                    $this->wallets->commit(
+                        $reservation,
+                        $amountKobo,
+                        SystemAccounts::PROVIDER_PAYABLE,
+                        $fee,
+                    );
+                }
 
-                $this->wallets->fund(
-                    $wallet,
-                    $amountKobo + $fee,
-                    SystemAccounts::FUNDING_RECEIVABLE,
-                    'Wallet funding ('.((string) ($txn->metadata['method'] ?? 'provider')).')',
-                    'FUND_'.((string) $txn->reference),
-                );
+                $txn->update([
+                    'provider' => $providerName,
+                    'provider_reference' => $providerReference ?? $txn->provider_reference,
+                ]);
 
-                $this->transactions->transition($txn, TransactionStatus::Success, 'funding confirmed', [
+                $this->transactions->transition($txn, TransactionStatus::Success, 'payout confirmed', [
                     'provider_reference' => $providerReference,
                 ]);
                 $this->transactions->transition($txn, TransactionStatus::Completed, 'settled');
 
                 $this->outbox->record('transaction', $txn->id, 'transaction.completed', [
                     'reference' => $txn->reference,
-                    'type' => TransactionType::WalletFunding->value,
+                    'type' => TransactionType::BankTransfer->value,
                     'amount' => $amountKobo,
                 ]);
             } elseif ($outcome === ProviderOutcome::DefinitiveFailure) {
-                $this->transactions->transition($txn, TransactionStatus::Failed, $error ?? 'funding failed');
+                if ($reservationActive) {
+                    $this->wallets->release($reservation, 'payout_confirmed_failure');
+                }
+
+                $this->transactions->transition($txn, TransactionStatus::Failed, $error ?? 'payout failed');
 
                 $this->outbox->record('transaction', $txn->id, 'transaction.failed', [
                     'reference' => $txn->reference,
-                    'type' => TransactionType::WalletFunding->value,
+                    'type' => TransactionType::BankTransfer->value,
                     'error' => $error,
                 ]);
             } else {
                 $status = TransactionStatus::from($txn->status);
 
                 if ($status !== TransactionStatus::Verifying) {
-                    $this->transactions->transition($txn, TransactionStatus::Ambiguous, $error ?? 'funding outcome unknown');
+                    $this->transactions->transition($txn, TransactionStatus::Ambiguous, $error ?? 'payout outcome unknown');
                     $this->transactions->transition($txn, TransactionStatus::Verifying, 'verification scheduled');
                 }
 
                 $this->outbox->record('transaction', $txn->id, 'transaction.ambiguous', [
                     'reference' => $txn->reference,
-                    'type' => TransactionType::WalletFunding->value,
+                    'type' => TransactionType::BankTransfer->value,
                 ]);
             }
         });
+    }
+
+    private function resolveProvider(?string $requested): string
+    {
+        if ($requested !== null && $requested !== '') {
+            return $requested;
+        }
+
+        return (string) config('ase.default_payout_provider', 'wema');
     }
 }

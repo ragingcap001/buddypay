@@ -36,6 +36,8 @@ Route::prefix('v1')->group(function (): void {
             Route::get('/transactions', [WalletController::class, 'transactions']);
             Route::post('/fund', [WalletController::class, 'fund'])
                 ->middleware(['idempotent', 'pin', 'throttle:transactions']);
+            Route::post('/payout', [WalletController::class, 'payout'])
+                ->middleware(['idempotent', 'pin', 'throttle:transactions']);
         });
 
         Route::prefix('transactions')->group(function (): void {

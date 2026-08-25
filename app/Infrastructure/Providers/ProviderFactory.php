@@ -3,6 +3,7 @@
 namespace App\Infrastructure\Providers;
 
 use App\Domain\Payments\Contracts\PaymentProviderInterface;
+use App\Domain\Payments\Contracts\PayoutProviderInterface;
 use App\Domain\Providers\Contracts\BillProviderInterface;
 use App\Domain\Providers\Contracts\ReconciliationProviderInterface;
 use App\Exceptions\FinancialException;
@@ -42,6 +43,23 @@ final class ProviderFactory
 
         if (! $instance instanceof PaymentProviderInterface) {
             throw new FinancialException('PROVIDER_NOT_FOUND', "Class [{$class}] does not implement PaymentProviderInterface.", 500);
+        }
+
+        return $instance;
+    }
+
+    public function makePayoutProvider(string $name): PayoutProviderInterface
+    {
+        $class = config("ase.payout_providers.{$name}");
+
+        if (! is_string($class)) {
+            throw new FinancialException('PROVIDER_NOT_FOUND', "No payout provider implementation registered for [{$name}].", 404);
+        }
+
+        $instance = app($class);
+
+        if (! $instance instanceof PayoutProviderInterface) {
+            throw new FinancialException('PROVIDER_NOT_FOUND', "Class [{$class}] does not implement PayoutProviderInterface.", 500);
         }
 
         return $instance;

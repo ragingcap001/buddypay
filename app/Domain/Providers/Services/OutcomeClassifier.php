@@ -3,6 +3,7 @@
 namespace App\Domain\Providers\Services;
 
 use App\Domain\Providers\Enums\ProviderOutcome;
+use App\Exceptions\ProviderDeclinedException;
 use App\Exceptions\ProviderTimeoutException;
 use Illuminate\Http\Client\ConnectionException;
 use Throwable;
@@ -50,6 +51,12 @@ final class OutcomeClassifier
      */
     public function classifyException(Throwable $e): ProviderOutcome
     {
+        // The provider rejected the request before initiating anything —
+        // no external transaction may exist, so failing it is safe.
+        if ($e instanceof ProviderDeclinedException) {
+            return ProviderOutcome::DefinitiveFailure;
+        }
+
         if ($e instanceof ProviderTimeoutException) {
             return ProviderOutcome::Ambiguous;
         }

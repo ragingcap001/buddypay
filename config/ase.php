@@ -95,12 +95,39 @@ return [
 
     'payment_providers' => [
         'mock' => \App\Infrastructure\Providers\MockPaymentProvider::class,
+        'wema' => \App\Infrastructure\Providers\Wema\WemaPaymentProvider::class,
     ],
 
-    // Webhook shared secrets per provider (used by the mock providers to
-    // sign/verify webhook payloads).
+    // Payout providers (wallet -> bank transfers). Each maps a provider name
+    // to its implementation class.
+    'payout_providers' => [
+        'mock' => \App\Infrastructure\Providers\MockPayoutProvider::class,
+        'wema' => \App\Infrastructure\Providers\Wema\WemaPayoutProvider::class,
+    ],
+
+    'default_payout_provider' => env('ASE_DEFAULT_PAYOUT_PROVIDER', 'wema'),
+
+    // Webhook shared secrets per provider (used to verify inbound webhook
+    // signatures). NOTE: Monnify signs webhooks with its client secret key
+    // (HMAC-SHA512, `monnify-signature` header) — configure it via
+    // MONNIFY_SECRET_KEY; production only, sandbox notifications are unsigned.
     'webhook_secrets' => [
         'mock' => env('ASE_WEBHOOK_SECRET_MOCK', 'mock-webhook-secret'),
+        'wema' => env('ASE_WEBHOOK_SECRET_WEMA', ''),
+    ],
+
+    // Wema (ALAT) Developer API.
+    // Docs: https://wema-alatdev-apimgt.developer.azure-api.net/
+    // Test credentials are issued on portal signup; production base URL and
+    // key are issued at onboarding. `webhook` is the PUBLIC URL Wema posts
+    // payment-request and payout callbacks to (e.g.
+    // https://api.example.com/api/v1/webhooks/wema).
+    'wema' => [
+        'base_url' => env('WEMA_BASE_URL', 'https://wema-alatdev-apimgt.developer.azure-api.net'),
+        'api_key' => env('WEMA_API_KEY', ''),
+        'webhook' => env('WEMA_WEBHOOK_URL', ''),
+        'timeout_seconds' => 10,
+        'connect_timeout_seconds' => 5,
     ],
 
     // Mock provider behaviour (development and automated tests only).
@@ -108,5 +135,6 @@ return [
     'mock' => [
         'mode' => env('ASE_MOCK_MODE', 'success'),
         'funding_mode' => env('ASE_MOCK_FUNDING_MODE', 'success'),
+        'payout_mode' => env('ASE_MOCK_PAYOUT_MODE', 'success'),
     ],
 ];

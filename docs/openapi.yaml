@@ -194,6 +194,12 @@ paths:
     post:
       tags: [wallet]
       summary: Fund the wallet via a payment provider (idempotent, PIN required)
+      description: |
+        `provider` selects the funding rail (`mock`, `wema`).
+        Asynchronous rails (bank transfer) return a `VERIFYING` transaction
+        with `data.metadata.payment_details` carrying the deposit
+        instructions (e.g. the virtual account to transfer to); the wallet is
+        credited when the provider confirms (webhook / verify).
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/TransactionPin"
@@ -207,12 +213,46 @@ paths:
               properties:
                 amount: { type: integer, minimum: 100, description: "Kobo" }
                 method: { type: string }
+                provider: { type: string, enum: [mock, wema] }
       responses:
         "200": { description: "Transaction (COMPLETED | FAILED | VERIFYING)" }
         "400": { description: IDEMPOTENCY_KEY_REQUIRED | PIN_REQUIRED }
         "401": { description: PIN_INVALID }
         "403": { description: RISK_BLOCKED }
         "409": { description: IDEMPOTENCY_KEY_REUSED | REQUEST_IN_PROGRESS }
+  /wallet/payout:
+    post:
+      tags: [wallet]
+      summary: Transfer out of the wallet to a bank account (idempotent, PIN required)
+      description: |
+        Wallet funds are reserved immediately (amount + fee) and released
+        back on a definitive failure; on ambiguity they stay reserved until
+        the provider confirms (webhook / verify / stale-transaction sweep).
+        `provider` selects the payout rail (`mock`, `wema`).
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/TransactionPin"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount, bank_code, account_number, account_name]
+              properties:
+                amount: { type: integer, minimum: 100, description: "Kobo" }
+                bank_code: { type: string, pattern: "^\\d{3}$", description: "NIP bank code" }
+                account_number: { type: string, pattern: "^\\d{10}$" }
+                account_name: { type: string, maxLength: 100 }
+                narration: { type: string, maxLength: 100 }
+                provider: { type: string, enum: [mock, wema] }
+      responses:
+        "200": { description: "Transaction (COMPLETED | FAILED | VERIFYING)" }
+        "400": { description: IDEMPOTENCY_KEY_REQUIRED | PIN_REQUIRED }
+        "401": { description: PIN_INVALID }
+        "403": { description: RISK_BLOCKED }
+        "409": { description: IDEMPOTENCY_KEY_REUSED | REQUEST_IN_PROGRESS }
+        "422": { description: INSUFFICIENT_BALANCE | BENEFICIARY_NOT_FOUND }
   /transactions:
     get:
       tags: [transactions]
@@ -362,6 +402,12 @@ paths:
       tags: [webhooks]
       security: []
       summary: Provider webhook receiver (HMAC-signed, idempotent)
+      description: |
+        Signature scheme: HMAC-SHA256 of the raw body in
+        `X-Webhook-Signature` keyed by the provider webhook secret.
+        Raw event shapes are normalized per provider; events settle
+        `WALLET_FUNDING` (deposits) and `BANK_TRANSFER` (payouts)
+        transactions idempotently.
       parameters:
         - name: provider
           in: path

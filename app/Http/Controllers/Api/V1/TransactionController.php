@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Domain\Payments\Services\FundingService;
+use App\Domain\Payments\Services\PayoutService;
 use App\Domain\Transactions\Enums\TransactionType;
 use App\Domain\Transactions\Services\BillPaymentService;
 use App\Domain\Transactions\Services\TransactionService;
@@ -19,6 +20,7 @@ class TransactionController extends Controller
         private readonly TransactionService $transactions,
         private readonly BillPaymentService $billPayments,
         private readonly FundingService $funding,
+        private readonly PayoutService $payouts,
     ) {
     }
 
@@ -73,6 +75,8 @@ class TransactionController extends Controller
 
         if ($transaction->type === TransactionType::WalletFunding->value) {
             $fresh = $this->funding->verifyReference($transaction);
+        } elseif ($transaction->type === TransactionType::BankTransfer->value) {
+            $fresh = $this->payouts->verifyReference($transaction);
         } else {
             $fresh = $this->billPayments->verify($reference);
         }
