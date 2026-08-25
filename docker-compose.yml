@@ -62,7 +62,9 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: php artisan horizon
+    # Migrations first (idempotent) — the worker may start before the app
+    # container has run them, and `horizon` needs the jobs tables.
+    command: sh -c "php artisan migrate --force && php artisan horizon"
     environment:
       DB_HOST: postgres
       REDIS_HOST: redis

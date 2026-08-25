@@ -3,7 +3,13 @@ set -e
 
 cd /var/www/html
 
-# First-boot setup (idempotent).
+# When a command is passed (e.g. `php artisan horizon` in the worker
+# service), run it directly — no migrations, no php-fpm.
+if [ $# -gt 0 ]; then
+    exec "$@"
+fi
+
+# First-boot setup (idempotent) for the default php-fpm service.
 if [ ! -f .env ]; then
     cp .env.example .env
 fi
