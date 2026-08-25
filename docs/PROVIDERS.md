@@ -121,5 +121,88 @@ ASE_DEFAULT_PAYOUT_PROVIDER=wema
 
 ## Monnify
 
-*(scaffold in progress — see the Monnify section added alongside the
-`app/Infrastructure/Providers/Monnify/` adapters)*
+- Docs: <https://developers.monnify.com/>
+- Base URL: `https://sandbox.monnify.com` (sandbox) / `https://api.monnify.com` (live)
+- Auth: OAuth 2.0 client-credentials Bearer token —
+  `POST /api/v2/oauth/token` with `api_key`, `contract_code`, `secret_key`.
+  Tokens are short-lived and cached in the cache store.
+- Amounts: NGN major units with two decimals (e.g. `1000.00`); the client
+  converts from the platform's integer kobo with pure integer math.
+
+### Endpoints used
+
+| Purpose | Method + path |
+| --- | --- |
+| OAuth token | `POST /api/v2/oauth/token` |
+| Initialize one-time payment (funding: bank transfer / card / USSD) | `POST /api/v2/charges/transactions` |
+| Collection transaction status | `GET /api/v2/charges/transactions/{reference}` |
+| Reserve customer virtual account (persistent, per customer) | `POST /api/v2/bank-transfer/reserved-accounts` |
+| Reserved account status | `GET /api/v2/bank-transfer/reserved-accounts/{accountReference}` |
+| Single transfer (payout, async) | `POST /api/v2/disbursements/single` |
+| Authorize single transfer (MFA OTP) | `POST /api/v2/disbursements/single/validate-otp` |
+| Resend MFA OTP | `POST /api/v2/disbursements/single/resend-otp` |
+| Single transfer status | `GET /api/v2/disbursements/single/summary?reference={reference}` |
+| NIP name enquiry | `GET /api/v2/transfer/name-enquiry/{bankCode}/{accountNumber}` |
+| Disbursement wallet balance | `GET /api/v2/disbursements/wallet-balance?accountNumber={account}` |
+
+### Mapping
+
+- **Funding**: `charge()` initializes a one-time payment whose
+  `paymentReference` is the platform transaction reference. Monnify returns
+  a `paymentUrl` and (for bank transfer) a virtual account — surfaced to the
+  client via `metadata.payment_details`. Settlement: `SUCCESSFUL_TRANSACTION`
+  webhook (matched on `paymentReference`) or `verify()`.
+  The Customer Reserved Account API is available on the client for the
+  persistent-per-customer virtual account product; the one-time flow keeps a
+  1:1 mapping to platform transactions.
+- **Payouts**: `payout()` initiates an **async** single transfer funded from
+  the platform's Monnify disbursement wallet (`MONNIFY_SOURCE_ACCOUNT`).
+  Monnify MFA is **enabled by default** on disbursement accounts, so the
+  usual response is `PENDING_AUTHORIZATION` → `AMBIGUOUS`; the operator then
+  runs:
+
+  ```bash
+  php artisan payouts:authorize {transaction-reference} {otp}
+  ```
+
+  (OTP is emailed to the Monnify account's registered email. A
+  `resend-otp` client call exists if it expires.) Final status also arrives
+  via `SUCCESSFUL_DISBURSEMENT` / `FAILED_DISBURSEMENT` webhooks or
+  `verify()`.
+
+### Webhook contract
+
+Monnify POSTs `{ eventType, eventData: { ... } }` to the dashboard-configured
+webhook URL (point it at `https://<public-host>/api/v1/webhooks/monnify`):
+
+- `SUCCESSFUL_TRANSACTION` → funding success (`eventData.paymentReference`
+  is the platform reference; `eventData.transactionReference` is Monnify's).
+- `UNSUCCESSFUL_TRANSACTION` → funding failure.
+- `SUCCESSFUL_DISBURSEMENT` → payout success (`eventData.reference` is the
+  platform reference — we pass it as the transfer reference).
+- `FAILED_DISBURSEMENT` / `UNSUCCESSFUL_DISBURSEMENT` → payout failure.
+
+**Signature verification**: Monnify signs the raw body with the **client
+secret key** using HMAC-SHA512 and sends it in the `monnify-signature`
+header — **production only** (sandbox notifications are unsigned). Set
+`MONNIFY_SECRET_KEY` to the same value as the dashboard's secret key; the
+webhook receiver rejects unsigned/mis-signed deliveries when a secret is
+configured. Also whitelist Monnify's IP (`35.242.133.146`) at the edge.
+
+### Prerequisites (live)
+
+- Enable **Disbursements** on the Monnify account (Settings → Preferences)
+  and whitelist the egress IP address (unwhitelisted payout requests fail
+  with `D06`).
+- Fund the disbursement wallet (`MONNIFY_SOURCE_ACCOUNT`) — payouts are
+  settled from it.
+
+### Configuration
+
+```env
+MONNIFY_BASE_URL=https://sandbox.monnify.com
+MONNIFY_API_KEY=...
+MONNIFY_SECRET_KEY=...
+MONNIFY_CONTRACT_CODE=...
+MONNIFY_SOURCE_ACCOUNT=...
+```

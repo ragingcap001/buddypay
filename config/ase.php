@@ -96,6 +96,7 @@ return [
     'payment_providers' => [
         'mock' => \App\Infrastructure\Providers\MockPaymentProvider::class,
         'wema' => \App\Infrastructure\Providers\Wema\WemaPaymentProvider::class,
+        'monnify' => \App\Infrastructure\Providers\Monnify\MonnifyPaymentProvider::class,
     ],
 
     // Payout providers (wallet -> bank transfers). Each maps a provider name
@@ -103,6 +104,7 @@ return [
     'payout_providers' => [
         'mock' => \App\Infrastructure\Providers\MockPayoutProvider::class,
         'wema' => \App\Infrastructure\Providers\Wema\WemaPayoutProvider::class,
+        'monnify' => \App\Infrastructure\Providers\Monnify\MonnifyPayoutProvider::class,
     ],
 
     'default_payout_provider' => env('ASE_DEFAULT_PAYOUT_PROVIDER', 'wema'),
@@ -128,6 +130,20 @@ return [
         'webhook' => env('WEMA_WEBHOOK_URL', ''),
         'timeout_seconds' => 10,
         'connect_timeout_seconds' => 5,
+    ],
+
+    // Monnify API (wallet funding + disbursements/payouts).
+    // Docs: https://developers.monnify.com/
+    // Sandbox base URL for development; use https://api.monnify.com with
+    // live credentials in production. `source_account_number` is the
+    // Monnify disbursement wallet account that funds payouts.
+    'monnify' => [
+        'base_url' => env('MONNIFY_BASE_URL', 'https://sandbox.monnify.com'),
+        'api_key' => env('MONNIFY_API_KEY', ''),
+        'secret_key' => env('MONNIFY_SECRET_KEY', ''),
+        'contract_code' => env('MONNIFY_CONTRACT_CODE', ''),
+        'source_account_number' => env('MONNIFY_SOURCE_ACCOUNT', ''),
+        'currency' => 'NGN',
     ],
 
     // Mock provider behaviour (development and automated tests only).

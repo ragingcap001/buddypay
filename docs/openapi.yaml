@@ -195,7 +195,7 @@ paths:
       tags: [wallet]
       summary: Fund the wallet via a payment provider (idempotent, PIN required)
       description: |
-        `provider` selects the funding rail (`mock`, `wema`).
+        `provider` selects the funding rail (`mock`, `wema`, `monnify`).
         Asynchronous rails (bank transfer) return a `VERIFYING` transaction
         with `data.metadata.payment_details` carrying the deposit
         instructions (e.g. the virtual account to transfer to); the wallet is
@@ -213,7 +213,7 @@ paths:
               properties:
                 amount: { type: integer, minimum: 100, description: "Kobo" }
                 method: { type: string }
-                provider: { type: string, enum: [mock, wema] }
+                provider: { type: string, enum: [mock, wema, monnify] }
       responses:
         "200": { description: "Transaction (COMPLETED | FAILED | VERIFYING)" }
         "400": { description: IDEMPOTENCY_KEY_REQUIRED | PIN_REQUIRED }
@@ -228,7 +228,7 @@ paths:
         Wallet funds are reserved immediately (amount + fee) and released
         back on a definitive failure; on ambiguity they stay reserved until
         the provider confirms (webhook / verify / stale-transaction sweep).
-        `provider` selects the payout rail (`mock`, `wema`).
+        `provider` selects the payout rail (`mock`, `wema`, `monnify`).
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/TransactionPin"
@@ -245,7 +245,7 @@ paths:
                 account_number: { type: string, pattern: "^\\d{10}$" }
                 account_name: { type: string, maxLength: 100 }
                 narration: { type: string, maxLength: 100 }
-                provider: { type: string, enum: [mock, wema] }
+                provider: { type: string, enum: [mock, wema, monnify] }
       responses:
         "200": { description: "Transaction (COMPLETED | FAILED | VERIFYING)" }
         "400": { description: IDEMPOTENCY_KEY_REQUIRED | PIN_REQUIRED }
@@ -403,11 +403,12 @@ paths:
       security: []
       summary: Provider webhook receiver (HMAC-signed, idempotent)
       description: |
-        Signature scheme: HMAC-SHA256 of the raw body in
-        `X-Webhook-Signature` keyed by the provider webhook secret.
-        Raw event shapes are normalized per provider; events settle
-        `WALLET_FUNDING` (deposits) and `BANK_TRANSFER` (payouts)
-        transactions idempotently.
+        Signature schemes: `mock`/`wema` — HMAC-SHA256 of the raw body in
+        `X-Webhook-Signature` keyed by the provider webhook secret;
+        `monnify` — HMAC-SHA512 of the raw body in `monnify-signature` keyed
+        by the Monnify client secret (production only). Raw event shapes are
+        normalized per provider; events settle `WALLET_FUNDING` (deposits)
+        and `BANK_TRANSFER` (payouts) transactions idempotently.
       parameters:
         - name: provider
           in: path

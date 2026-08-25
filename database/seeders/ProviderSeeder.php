@@ -25,6 +25,14 @@ class ProviderSeeder extends Seeder
                 'status' => 'ACTIVE',
                 'priority' => 20,
             ],
+            [
+                'name' => 'monnify',
+                'type' => 'PAYMENT',
+                'display_name' => 'Monnify',
+                'base_url' => config('ase.monnify.base_url'),
+                'status' => 'ACTIVE',
+                'priority' => 20,
+            ],
         ];
 
         foreach ($providers as $attributes) {
