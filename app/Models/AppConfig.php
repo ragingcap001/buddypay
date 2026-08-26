@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Model;
 /**
  * A single runtime configuration value, editable from the admin
  * dashboard. Values are encrypted at rest. A row overrides the

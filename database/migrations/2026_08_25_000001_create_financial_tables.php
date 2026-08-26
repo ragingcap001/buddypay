@@ -49,7 +49,7 @@ return new class extends Migration
             $table->json('metadata')->nullable();
             $table->string('provider', 64)->nullable();
             $table->string('provider_reference', 128)->nullable();
-            $table->foreignId('reservation_id')->nullable()->constrained()->nullOnDelete();
+            $table->foreignId('reservation_id')->nullable()->constrained('wallet_reservations')->nullOnDelete();
             $table->timestamp('completed_at')->nullable();
             $table->timestamps();
             $table->index(['user_id', 'created_at']);

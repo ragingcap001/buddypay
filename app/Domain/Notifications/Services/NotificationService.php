@@ -50,12 +50,14 @@ final class NotificationService
         ]);
 
         // Real delivery: push to registered devices when FCM is configured.
-        $this->deliverPush($notification, $userId, $title, $body);
+        $this->deliverPush($notification, $userId, $type, $title, $body);
 
-        return $notification->update(['status' => CustomerNotification::STATUS_SENT]);
+        $notification->update(['status' => CustomerNotification::STATUS_SENT]);
+
+        return $notification;
     }
 
-    private function deliverPush(CustomerNotification $notification, int $userId, string $title, string $body): void
+    private function deliverPush(CustomerNotification $notification, int $userId, string $type, string $title, string $body): void
     {
         $user = \App\Models\User::find($userId);
 

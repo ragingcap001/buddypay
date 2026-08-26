@@ -18,8 +18,8 @@ class ReconcileProvider extends Command
     public function handle(ReconciliationService $reconciliation): int
     {
         $to = now()->endOfDay();
-        $from = $this->argument('from')
-            ? Carbon::parse($this->argument('from'))->startOfDay()
+        $from = $this->option('from')
+            ? Carbon::parse($this->option('from'))->startOfDay()
             : $to->copy()->subDays((int) $this->option('days'))->startOfDay();
 
         $batch = $reconciliation->runBatch((string) $this->argument('provider'), $from, $to);
