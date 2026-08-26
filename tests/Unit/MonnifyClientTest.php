@@ -6,12 +6,15 @@ use App\Exceptions\FinancialException;
 use App\Exceptions\ProviderDeclinedException;
 use App\Infrastructure\Providers\Monnify\MonnifyClient;
 use Closure;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
 final class MonnifyClientTest extends TestCase
 {
+    use RefreshDatabase; // AppConfigService consults the app_config table
+
     protected function setUp(): void
     {
         parent::setUp();

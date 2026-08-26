@@ -26,6 +26,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'pin' => \App\Http\Middleware\RequirePin::class,
             'idempotent' => \App\Http\Middleware\EnsureIdempotencyKey::class,
             'active' => \App\Http\Middleware\EnsureUserIsActive::class,
+            'admin' => \App\Http\Middleware\EnsureAdmin::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

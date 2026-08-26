@@ -42,6 +42,7 @@ class WebhookController extends Controller
         private readonly PayoutService $payouts,
         private readonly ProviderWebhookNormalizer $normalizer,
         private readonly AuditService $audit,
+        private readonly \App\Domain\Config\Services\AppConfigService $appConfig,
     ) {
     }
 
@@ -129,7 +130,8 @@ class WebhookController extends Controller
 
         if ($providerName === 'monnify') {
             // Monnify signs webhooks with the client secret (HMAC-SHA512).
-            $secret = (string) config('ase.monnify.secret_key', '');
+            // Admin-dashboard override first, MONNIFY_SECRET_KEY as fallback.
+            $secret = (string) ($this->appConfig->get('monnify', 'secret_key') ?? '');
             $signature = (string) $request->header('monnify-signature', $request->header('X-Monnify-Signature', ''));
 
             if ($secret === '' || $signature === '') {
@@ -139,7 +141,11 @@ class WebhookController extends Controller
             return hash_equals(hash_hmac('sha512', $rawBody, $secret), $signature);
         }
 
-        $secret = (string) config("ase.webhook_secrets.{$providerName}", '');
+        if ($providerName === 'wema') {
+            $secret = (string) ($this->appConfig->get('wema', 'webhook_secret') ?? '');
+        } else {
+            $secret = (string) config("ase.webhook_secrets.{$providerName}", '');
+        }
         $signature = (string) $request->header('X-Webhook-Signature', '');
 
         if ($secret === '' || $signature === '') {

@@ -13,6 +13,9 @@ class User extends Authenticatable
     /** @use \Illuminate\Database\Eloquent\Factories\HasFactory */
     use HasApiTokens, HasFactory, Notifiable;
 
+    public const ROLE_USER = 'user';
+    public const ROLE_ADMIN = 'admin';
+
     /**
      * The attributes that are mass assignable.
      *
@@ -24,6 +27,7 @@ class User extends Authenticatable
         'email',
         'password',
         'status',
+        'role',
         'pin_hash',
         'phone_verified_at',
     ];
@@ -81,5 +85,15 @@ class User extends Authenticatable
     public function isActive(): bool
     {
         return $this->status === \App\Domain\Users\Enums\UserStatus::Active->value;
+    }
+
+    public function isAdmin(): bool
+    {
+        return $this->role === self::ROLE_ADMIN;
+    }
+
+    public function pushDevices(): HasMany
+    {
+        return $this->hasMany(PushDevice::class);
     }
 }

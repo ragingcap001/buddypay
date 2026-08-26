@@ -1,9 +1,12 @@
 <?php
 
+use App\Http\Controllers\Api\V1\Admin\AdminConfigController;
+use App\Http\Controllers\Api\V1\Admin\AdminPushController;
 use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\BillController;
 use App\Http\Controllers\Api\V1\HealthController;
 use App\Http\Controllers\Api\V1\KycController;
+use App\Http\Controllers\Api\V1\NotificationDeviceController;
 use App\Http\Controllers\Api\V1\TransactionController;
 use App\Http\Controllers\Api\V1\WalletController;
 use App\Http\Controllers\Api\V1\WebhookController;
@@ -63,6 +66,23 @@ Route::prefix('v1')->group(function (): void {
             Route::post('/nin', [KycController::class, 'nin'])->middleware('throttle:auth');
             Route::post('/documents', [KycController::class, 'documents'])->middleware('throttle:auth');
         });
+
+        Route::prefix('notifications')->group(function (): void {
+            Route::post('/devices', [NotificationDeviceController::class, 'store'])->middleware('throttle:auth');
+            Route::get('/devices', [NotificationDeviceController::class, 'index']);
+            Route::delete('/devices/{token}', [NotificationDeviceController::class, 'destroy'])
+                ->where('token', '[A-Za-z0-9._-]+');
+        });
+    });
+
+    // Admin dashboard API — web-session auth + admin role (NOT the sanctum
+    // bearer flow: the dashboard is same-origin and uses CSRF).
+    Route::prefix('admin')->middleware(['auth', 'admin', 'verified'])->group(function (): void {
+        Route::get('/config', [AdminConfigController::class, 'index']);
+        Route::put('/config', [AdminConfigController::class, 'update'])->middleware('throttle:auth');
+        Route::get('/providers', [AdminConfigController::class, 'providers']);
+        Route::post('/push/test', [AdminPushController::class, 'test'])->middleware('throttle:auth');
+        Route::get('/push/devices', [AdminPushController::class, 'devices']);
     });
 
     // Provider webhooks (authenticated by HMAC signature, not user token)

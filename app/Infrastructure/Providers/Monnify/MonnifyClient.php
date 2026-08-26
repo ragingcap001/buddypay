@@ -2,6 +2,7 @@
 
 namespace App\Infrastructure\Providers\Monnify;
 
+use App\Domain\Config\Services\AppConfigService;
 use App\Exceptions\FinancialException;
 use App\Exceptions\ProviderDeclinedException;
 use Illuminate\Http\Client\ConnectionException;
@@ -31,6 +32,19 @@ final class MonnifyClient
     /** Sandbox base URL (live: https://api.monnify.com). */
     public const DEFAULT_BASE_URL = 'https://sandbox.monnify.com';
 
+    public function __construct(private readonly AppConfigService $config)
+    {
+    }
+
+    /**
+     * Effective Monnify config value (admin-dashboard override first,
+     * MONNIFY_* env as fallback).
+     */
+    private function val(string $key): string
+    {
+        return (string) ($this->config->get('monnify', $key) ?? '');
+    }
+
     /**
      * Convert integer kobo to the Monnify "major units, two decimals"
      * representation using pure integer math (no floats).
@@ -47,10 +61,10 @@ final class MonnifyClient
 
     private function requireCredentials(): void
     {
-        if ((string) config('ase.monnify.api_key', '') === '' || (string) config('ase.monnify.contract_code', '') === '') {
+        if ($this->val('api_key') === '' || $this->val('contract_code') === '') {
             throw new FinancialException(
                 'MONNIFY_NOT_CONFIGURED',
-                'Monnify credentials are not configured (MONNIFY_API_KEY / MONNIFY_CONTRACT_CODE).',
+                'Monnify credentials are not configured (admin dashboard or MONNIFY_API_KEY / MONNIFY_CONTRACT_CODE).',
                 503,
             );
         }
@@ -64,7 +78,7 @@ final class MonnifyClient
     {
         $this->requireCredentials();
 
-        $apiKey = (string) config('ase.monnify.api_key');
+        $apiKey = $this->val('api_key');
         $cacheKey = 'monnify:token:'.substr(hash('sha256', $apiKey), 0, 16);
 
         $cached = Cache::get($cacheKey);
@@ -73,14 +87,14 @@ final class MonnifyClient
             return $cached;
         }
 
-        $response = Http::baseUrl((string) config('ase.monnify.base_url', self::DEFAULT_BASE_URL))
+        $response = Http::baseUrl($this->val('base_url') !== '' ? $this->val('base_url') : self::DEFAULT_BASE_URL)
             ->asForm()
             ->timeout(15)
             ->post('/api/v2/oauth/token', [
                 'grant_type' => 'client_credentials',
                 'api_key' => $apiKey,
-                'contract_code' => (string) config('ase.monnify.contract_code'),
-                'secret_key' => (string) config('ase.monnify.secret_key'),
+                'contract_code' => $this->val('contract_code'),
+                'secret_key' => $this->val('secret_key'),
             ]);
 
         $envelope = (array) $response->json();
@@ -113,7 +127,7 @@ final class MonnifyClient
      */
     public function request(string $method, string $path, array $body = [], array $query = []): array
     {
-        $pending = Http::baseUrl((string) config('ase.monnify.base_url', self::DEFAULT_BASE_URL))
+        $pending = Http::baseUrl($this->val('base_url') !== '' ? $this->val('base_url') : self::DEFAULT_BASE_URL)
             ->withToken($this->accessToken())
             ->timeout(15)
             ->acceptJson();
@@ -174,7 +188,7 @@ final class MonnifyClient
             'currency' => (string) config('ase.monnify.currency', 'NGN'),
             'customerName' => $customerName,
             'paymentDescription' => $paymentDescription,
-            'contractCode' => (string) config('ase.monnify.contract_code'),
+            'contractCode' => $this->val('contract_code'),
             'paymentMethods' => ['ACCOUNT_TRANSFER', 'CARD'],
         ];
 
@@ -210,7 +224,7 @@ final class MonnifyClient
     public function createReservedAccount(array $params): array
     {
         if (! isset($params['contractCode'])) {
-            $params['contractCode'] = (string) config('ase.monnify.contract_code');
+            $params['contractCode'] = $this->val('contract_code');
         }
 
         return $this->request('POST', '/api/v2/bank-transfer/reserved-accounts', $params);
@@ -240,12 +254,12 @@ final class MonnifyClient
      */
     public function singleTransfer(int $amountKobo, string $reference, string $bankCode, string $accountNumber, string $accountName, ?string $narration = null): array
     {
-        $sourceAccount = (string) config('ase.monnify.source_account_number', '');
+        $sourceAccount = $this->val('source_account');
 
         if ($sourceAccount === '') {
             throw new FinancialException(
                 'MONNIFY_NOT_CONFIGURED',
-                'Monnify disbursement source account is not configured (MONNIFY_SOURCE_ACCOUNT).',
+                'Monnify disbursement source account is not configured (admin dashboard or MONNIFY_SOURCE_ACCOUNT).',
                 503,
             );
         }

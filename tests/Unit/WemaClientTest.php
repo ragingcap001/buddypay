@@ -5,12 +5,15 @@ namespace Tests\Unit;
 use App\Exceptions\FinancialException;
 use App\Exceptions\ProviderDeclinedException;
 use App\Infrastructure\Providers\Wema\WemaClient;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
 final class WemaClientTest extends TestCase
 {
+    use RefreshDatabase; // AppConfigService consults the app_config table
+
     protected function setUp(): void
     {
         parent::setUp();

@@ -26,6 +26,8 @@ tags:
   - name: bills
   - name: kyc
   - name: webhooks
+  - name: notifications
+  - name: admin
 paths:
   /health:
     get:
@@ -419,6 +421,92 @@ paths:
         "401": { description: WEBHOOK_SIGNATURE_INVALID }
         "404": { description: PROVIDER_NOT_FOUND }
         "500": { description: WEBHOOK_PROCESSING_FAILED }
+  /notifications/devices:
+    post:
+      tags: [notifications]
+      summary: Register a push device (FCM token — iOS/Android/web)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [platform, token]
+              properties:
+                platform: { type: string, enum: [android, ios, web] }
+                token: { type: string }
+                name: { type: string }
+      responses:
+        "201": { description: Device registered }
+  /notifications/devices/{token}:
+    delete:
+      tags: [notifications]
+      summary: Unregister a push device (owner only)
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: Device unregistered }
+        "404": { description: DEVICE_NOT_FOUND }
+  /admin/config:
+    get:
+      tags: [admin]
+      summary: Effective configuration (manifest, DB overrides, env fallbacks; secrets masked)
+      parameters:
+        - name: group
+          in: query
+          schema: { type: string, enum: [wema, monnify, firebase, apple, google] }
+      responses:
+        "200": { description: group => key => {value, masked, overridden, env, label, secret} }
+        "401": { description: Unauthenticated }
+        "403": { description: Not an administrator }
+    put:
+      tags: [admin]
+      summary: Update configuration values (null clears a DB override -> env fallback)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [group, values]
+              properties:
+                group: { type: string, enum: [wema, monnify, firebase, apple, google] }
+                values:
+                  type: object
+                  additionalProperties: { type: string, nullable: true }
+      responses:
+        "200": { description: "{ applied: [group.key, ...] }" }
+  /admin/providers:
+    get:
+      tags: [admin]
+      summary: Provider health panel (status, circuit breaker, 24h attempt counts)
+      responses:
+        "200": { description: "{ providers: [...] }" }
+  /admin/push/test:
+    post:
+      tags: [admin]
+      summary: Send a test push (to a device token, or a random registered device)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                device_token: { type: string }
+      responses:
+        "200": { description: "{ message_id }" }
+        "404": { description: NO_DEVICES }
+        "503": { description: FCM_NOT_CONFIGURED }
+        "502": { description: PUSH_FAILED }
+  /admin/push/devices:
+    get:
+      tags: [admin]
+      summary: Registered push devices overview
+      responses:
+        "200": { description: "{ firebase_configured, total, devices }" }
 components:
   securitySchemes:
     bearerAuth:

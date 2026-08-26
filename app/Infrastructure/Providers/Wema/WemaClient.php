@@ -2,6 +2,7 @@
 
 namespace App\Infrastructure\Providers\Wema;
 
+use App\Domain\Config\Services\AppConfigService;
 use App\Exceptions\FinancialException;
 use App\Exceptions\ProviderDeclinedException;
 use Illuminate\Http\Client\ConnectionException;
@@ -32,6 +33,10 @@ final class WemaClient
     /** Default test-portal base URL (production is issued on onboarding). */
     public const DEFAULT_BASE_URL = 'https://wema-alatdev-apimgt.developer.azure-api.net';
 
+    public function __construct(private readonly AppConfigService $config)
+    {
+    }
+
     /**
      * The ALAT API prices in whole Naira (major units); the platform prices
      * in integer kobo. Pure integer math, no floats.
@@ -51,13 +56,24 @@ final class WemaClient
 
     private function apiKey(): string
     {
-        $key = (string) config('ase.wema.api_key', '');
+        // Admin-dashboard override first, WEMA_API_KEY as fallback.
+        $key = (string) ($this->config->get('wema', 'api_key') ?? '');
 
         if ($key === '') {
-            throw new FinancialException('WEMA_NOT_CONFIGURED', 'Wema API key is not configured (WEMA_API_KEY).', 503);
+            throw new FinancialException('WEMA_NOT_CONFIGURED', 'Wema API key is not configured (admin dashboard or WEMA_API_KEY).', 503);
         }
 
         return $key;
+    }
+
+    private function baseUrl(): string
+    {
+        return (string) ($this->config->get('wema', 'base_url') ?? self::DEFAULT_BASE_URL);
+    }
+
+    private function webhookUrl(): string
+    {
+        return (string) ($this->config->get('wema', 'webhook') ?? '');
     }
 
     /**
@@ -72,7 +88,7 @@ final class WemaClient
      */
     public function request(string $method, string $path, array $body = [], array $query = []): array
     {
-        $pending = Http::baseUrl((string) config('ase.wema.base_url', self::DEFAULT_BASE_URL))
+        $pending = Http::baseUrl($this->baseUrl())
             ->withHeaders([
                 'Api-Key' => $this->apiKey(),
                 'Accept' => 'application/json',
@@ -147,7 +163,7 @@ final class WemaClient
             'ttl' => $ttl,
         ];
 
-        $webhook = (string) config('ase.wema.webhook', '');
+        $webhook = $this->webhookUrl();
 
         if ($webhook !== '') {
             $body['webhook'] = $webhook;
@@ -211,7 +227,7 @@ final class WemaClient
             ],
         ];
 
-        $webhook = (string) config('ase.wema.webhook', '');
+        $webhook = $this->webhookUrl();
 
         if ($webhook !== '') {
             $body['webhook'] = $webhook;
