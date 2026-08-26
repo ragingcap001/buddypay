@@ -151,6 +151,52 @@ final class BankTransferTest extends TestCase
         $this->assertSame(0, Transaction::where('type', 'BANK_TRANSFER')->count());
     }
 
+    public function test_payout_success_after_reservation_lapse_fails_for_reconciliation(): void
+    {
+        config(['ase.mock.payout_mode' => 'timeout']);
+        [$user, $token] = $this->fundedUser(1000000);
+
+        $reference = $this->withHeaders($this->payoutHeaders($token))
+            ->postJson('/api/v1/wallet/payout', [
+                'amount' => 250000,
+                'bank_code' => '035',
+                'account_number' => '0123456789',
+                'account_name' => 'JOHN DOE',
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.status', 'VERIFYING')
+            ->json('data.reference');
+
+        $txn = Transaction::where('reference', $reference)->fresh();
+
+        // Simulate the reservation TTL lapsing while the bank was pending:
+        // the expirer would have released the funds back to the user.
+        WalletReservation::whereKey($txn->reservation_id)->update([
+            'status' => \App\Domain\Wallet\Enums\WalletReservationStatus::Expired->value,
+            'released_at' => now(),
+            'release_reason' => 'expired',
+        ]);
+        $user->wallet->fresh()->update(['reserved_balance' => 0]);
+
+        // The provider now confirms success. We must NOT book a COMPLETED
+        // payout against a released reservation.
+        $payload = [
+            'event_type' => 'payout.success',
+            'event_id' => 'lapse-success',
+            'reference' => $reference,
+            'provider_reference' => 'MOCKPAYOUT_LAPSE',
+        ];
+        $secret = (string) config('ase.webhook_secrets.mock');
+
+        $this->postJson('/api/v1/webhooks/mock', $payload, [
+            'X-Webhook-Signature' => hash_hmac('sha256', json_encode($payload), $secret),
+        ])->assertOk();
+
+        $this->assertSame('FAILED', $txn->fresh()->status);
+        $this->assertSame(1000000, (int) $user->wallet->fresh()->control_balance);
+        $this->assertTrue(app(LedgerService::class)->integrityReport()['balanced']);
+    }
+
     public function test_payout_idempotent_replay_returns_original_result(): void
     {
         config(['ase.mock.payout_mode' => 'success']);

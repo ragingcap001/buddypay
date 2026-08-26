@@ -25,6 +25,12 @@ final class NormalizedWebhookEvent
         public readonly ?string $providerReference,
         public readonly ?string $error,
         public readonly string $eventId,
+        /**
+         * The amount the provider reports, in kobo (integer minor units) —
+         * or null when the event carries no amount. The webhook receiver
+         * refuses to settle a transaction whose amount does not match.
+         */
+        public readonly ?int $amountKobo = null,
     ) {
     }
 }

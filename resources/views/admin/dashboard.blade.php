@@ -194,6 +194,8 @@ async function loadConfig() {
                 </div>
             </div>
         `).join('');
+        // Bind AFTER the render — the group buttons are created dynamically.
+        bindGroupButtons();
     } catch (e) { toast(e.message, true); }
 }
 
@@ -249,7 +251,7 @@ async function testPush() {
 }
 
 document.getElementById('push-test-btn').addEventListener('click', testPush);
-loadProviders(); loadPush(); loadConfig(); bindGroupButtons();
+loadProviders(); loadPush(); loadConfig();
 </script>
 </body>
 </html>

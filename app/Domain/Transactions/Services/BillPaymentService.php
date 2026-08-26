@@ -171,16 +171,34 @@ final class BillPaymentService
         }
 
         $reservation = $txn->reservation_id !== null ? WalletReservation::find($txn->reservation_id) : null;
+        $reservationActive = $reservation !== null && $reservation->status === \App\Domain\Wallet\Enums\WalletReservationStatus::Active->value;
 
         if ($outcome === ProviderOutcome::DefinitiveSuccess) {
-            if ($reservation !== null && $reservation->status === \App\Domain\Wallet\Enums\WalletReservationStatus::Active->value) {
-                $this->wallets->commit(
-                    $reservation,
-                    (int) $txn->amount,
-                    SystemAccounts::PROVIDER_PAYABLE,
-                    (int) $txn->fee,
+            if (! $reservationActive) {
+                // Same guard as applyOutcome: never book a COMPLETED
+                // purchase against a released reservation.
+                \Illuminate\Support\Facades\Log::critical(
+                    'Bill purchase confirmed after its reservation lapsed — reconciliation required',
+                    ['reference' => $txn->reference, 'provider_reference' => $providerReference],
                 );
+
+                $this->transactions->transition($txn, TransactionStatus::Failed, 'reservation lapsed before provider confirmation (reconcile)');
+
+                $this->outbox->record('transaction', $txn->id, 'transaction.failed', [
+                    'reference' => $txn->reference,
+                    'error' => 'reservation lapsed before provider confirmation',
+                ]);
+
+                return;
             }
+
+            $this->wallets->commit(
+                $reservation,
+                (int) $txn->amount,
+                SystemAccounts::PROVIDER_PAYABLE,
+                (int) $txn->fee,
+            );
+
             $txn->update(['provider_reference' => $providerReference ?? $txn->provider_reference]);
             $this->transactions->transition($txn, TransactionStatus::Success, 'verification confirmed success', ['provider_reference' => $providerReference]);
             $this->transactions->transition($txn, TransactionStatus::Completed, 'settled');
@@ -214,16 +232,41 @@ final class BillPaymentService
         DB::transaction(function () use ($transactionReference, $command, $providerName, $outcome, $providerReference, $error): void {
             $txn = $this->transactions->findByReference($transactionReference);
             $reservation = $txn->reservation_id !== null ? WalletReservation::find($txn->reservation_id) : null;
+            $reservationActive = $reservation !== null && $reservation->status === \App\Domain\Wallet\Enums\WalletReservationStatus::Active->value;
 
             if ($outcome === ProviderOutcome::DefinitiveSuccess) {
-                if ($reservation !== null) {
-                    $this->wallets->commit(
-                        $reservation,
-                        $command->amountKobo,
-                        SystemAccounts::PROVIDER_PAYABLE,
-                        $this->transactions->calculateFee($command->type, $command->amountKobo),
+                if (! $reservationActive) {
+                    // The reservation lapsed (TTL) before the provider
+                    // confirmed. We cannot book the purchase against a
+                    // released reservation — fail LOUDLY (never a silent
+                    // COMPLETED without ledger entries) and flag it for
+                    // reconciliation.
+                    \Illuminate\Support\Facades\Log::critical(
+                        'Bill purchase confirmed after its reservation lapsed — reconciliation required',
+                        [
+                            'reference' => $txn->reference,
+                            'provider' => $providerName,
+                            'provider_reference' => $providerReference,
+                        ],
                     );
+
+                    $this->transactions->transition($txn, TransactionStatus::Failed, 'reservation lapsed before provider confirmation (reconcile)');
+
+                    $this->outbox->record('transaction', $txn->id, 'transaction.failed', [
+                        'reference' => $txn->reference,
+                        'type' => $command->type->value,
+                        'error' => 'reservation lapsed before provider confirmation',
+                    ]);
+
+                    return;
                 }
+
+                $this->wallets->commit(
+                    $reservation,
+                    $command->amountKobo,
+                    SystemAccounts::PROVIDER_PAYABLE,
+                    $this->transactions->calculateFee($command->type, $command->amountKobo),
+                );
 
                 $txn->update([
                     'provider' => $providerName,
@@ -242,7 +285,7 @@ final class BillPaymentService
                     'provider' => $providerName,
                 ]);
             } elseif ($outcome === ProviderOutcome::DefinitiveFailure) {
-                if ($reservation !== null) {
+                if ($reservationActive) {
                     $this->wallets->release($reservation, 'provider_failure');
                 }
 

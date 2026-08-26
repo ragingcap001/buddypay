@@ -46,7 +46,6 @@ final class ProviderWebhookNormalizer
 
         $providerReference = (string) ($data['transactionReference'] ?? '');
         $isDisbursement = str_contains($rawEventType, 'DISBURSEMENT');
-        $succeeded = str_starts_with($rawEventType, 'SUCCESSFUL');
 
         $reference = $isDisbursement
             ? (string) ($data['reference'] ?? $providerReference)
@@ -54,13 +53,41 @@ final class ProviderWebhookNormalizer
 
         $base = $isDisbursement ? 'payout' : 'payment';
 
+        // Only known terminal event types may settle transactions. Anything
+        // else (settlements, refunds, retries, future events) is stored for
+        // the audit trail and ignored.
+        $eventType = match ($rawEventType) {
+            'SUCCESSFUL_TRANSACTION', 'SUCCESSFUL_DISBURSEMENT' => $base.'.success',
+            'UNSUCCESSFUL_TRANSACTION', 'FAILED_DISBURSEMENT', 'UNSUCCESSFUL_DISBURSEMENT' => $base.'.failed',
+            default => NormalizedWebhookEvent::IGNORED,
+        };
+
         return new NormalizedWebhookEvent(
-            eventType: $succeeded ? $base.'.success' : $base.'.failed',
+            eventType: $eventType,
             reference: $reference,
             providerReference: $providerReference !== '' ? $providerReference : null,
-            error: $succeeded ? null : (string) ($data['paymentDescription'] ?? "Monnify reported a failed {$base}"),
+            error: $eventType === $base.'.failed'
+                ? (string) ($data['paymentDescription'] ?? "Monnify reported a failed {$base}")
+                : null,
             eventId: $rawEventType.'|'.($providerReference !== '' ? $providerReference : $reference),
+            // Collections report amountPaid; disbursements report amount.
+            amountKobo: $this->nairaToKobo((string) ($data['amountPaid'] ?? ($data['amount'] ?? ''))),
         );
+    }
+
+    /**
+     * "2500.00" -> 250000 (pure integer math); null when not a
+     * major.minor decimal string (e.g. the Wema callback carries no amount).
+     */
+    private function nairaToKobo(string $naira): ?int
+    {
+        if (! preg_match('/^\d{1,13}\.\d{2}$/', $naira)) {
+            return null;
+        }
+
+        [$major, $minor] = explode('.', $naira);
+
+        return ((int) $major) * 100 + (int) $minor;
     }
 
     private function normalizeWema(array $payload): NormalizedWebhookEvent

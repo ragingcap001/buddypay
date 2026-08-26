@@ -107,7 +107,8 @@ final class AppConfigService
                     'secret' => $secret,
                     'multiline' => (bool) ($keyDefinition['multiline'] ?? false),
                     'overridden' => $overridden,
-                    'value' => $value,
+                    // Secrets are NEVER returned in full — only masked.
+                    'value' => $secret ? null : $value,
                     'masked' => $secret ? $this->mask($value) : $value,
                     'updated_by' => $row?->updatedBy?->email ?? $row?->updatedBy?->name,
                     'updated_at' => $row?->updated_at?->toIso8601String(),

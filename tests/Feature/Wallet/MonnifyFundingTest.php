@@ -220,6 +220,73 @@ final class MonnifyFundingTest extends TestCase
         $this->assertSame(1, ProviderWebhook::where('provider_event_id', 'SUCCESSFUL_TRANSACTION|MNFY_TRX_DUP')->count());
     }
 
+    public function test_webhook_with_mismatched_amount_is_not_settled(): void
+    {
+        [$user, $token] = $this->verifiedUser();
+        $user->update(['pin_hash' => Hash::make('1234')]);
+
+        $reference = $this->withHeaders($this->authHeaders($token))
+            ->withHeader('Idempotency-Key', 'monnify-fund-mismatch')
+            ->withHeader('X-Transaction-Pin', '1234')
+            ->postJson('/api/v1/wallet/fund', [
+                'amount' => 100000,
+                'method' => 'bank_transfer',
+                'provider' => 'monnify',
+            ])
+            ->assertOk()
+            ->json('data.reference');
+
+        // Claims ₦5,000 was paid for a ₦1,000 funding — must NOT settle.
+        $payload = [
+            'eventType' => 'SUCCESSFUL_TRANSACTION',
+            'eventData' => [
+                'transactionReference' => 'MNFY_TRX_MISMATCH',
+                'paymentReference' => $reference,
+                'amountPaid' => '5000.00',
+                'paymentStatus' => 'PAID',
+            ],
+        ];
+        $signed = $this->signedMonnifyWebhook($payload);
+
+        $this->postJson('/api/v1/webhooks/monnify', $signed['payload'], [
+            'monnify-signature' => $signed['signature'],
+        ])->assertOk();
+
+        // Still verifying, wallet untouched (reconciliation will flag it).
+        $this->assertSame('VERIFYING', Transaction::where('reference', $reference)->fresh()->status);
+        $this->assertSame(0, (int) $user->wallet->fresh()->control_balance);
+    }
+
+    public function test_unknown_monnify_event_types_are_ignored_not_failed(): void
+    {
+        [$user, $token] = $this->verifiedUser();
+        $user->update(['pin_hash' => Hash::make('1234')]);
+
+        $reference = $this->withHeaders($this->authHeaders($token))
+            ->withHeader('Idempotency-Key', 'monnify-fund-unknown-evt')
+            ->withHeader('X-Transaction-Pin', '1234')
+            ->postJson('/api/v1/wallet/fund', [
+                'amount' => 100000,
+                'method' => 'bank_transfer',
+                'provider' => 'monnify',
+            ])
+            ->assertOk()
+            ->json('data.reference');
+
+        // e.g. a settlement notification must not fail the transaction.
+        $payload = [
+            'eventType' => 'SETTLEMENT_COMPLETED',
+            'eventData' => ['transactionReference' => 'MNFY_TRX_SETTLE'],
+        ];
+        $signed = $this->signedMonnifyWebhook($payload);
+
+        $this->postJson('/api/v1/webhooks/monnify', $signed['payload'], [
+            'monnify-signature' => $signed['signature'],
+        ])->assertOk()->assertJsonPath('data.status', 'RECEIVED');
+
+        $this->assertSame('VERIFYING', Transaction::where('reference', $reference)->fresh()->status);
+    }
+
     public function test_verify_endpoint_confirms_monnify_transaction(): void
     {
         $this->fakeMonnify('PAID');

@@ -11,7 +11,9 @@ Route::get('/', function () {
 // Admin dashboard (web session auth; phone + password, admin role).
 Route::prefix('admin')->name('admin.')->group(function (): void {
     Route::get('/login', [AdminAuthController::class, 'showLogin'])->name('login');
-    Route::post('/login', [AdminAuthController::class, 'login'])->name('login.attempt');
+    Route::post('/login', [AdminAuthController::class, 'login'])
+        ->middleware('throttle:auth')
+        ->name('login.attempt');
     Route::post('/logout', [AdminAuthController::class, 'logout'])->name('logout');
 
     Route::get('/', [AdminDashboardController::class, 'index'])

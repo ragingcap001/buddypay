@@ -57,10 +57,17 @@ final class AdminConfigTest extends TestCase
             ->assertJsonPath('data.wema.base_url.value', 'https://wema-alatdev-apimgt.developer.azure-api.net')
             ->json('data');
 
-        // Env value is effective and shown masked (never in full).
-        $this->assertSame('wema-env-key', $response['wema']['api_key']['value']);
-        $this->assertNotSame('wema-env-key', $response['wema']['api_key']['masked']);
+        // Secrets are never returned in full — `value` is null, only the
+        // masked form is exposed.
+        $this->assertNull($response['wema']['api_key']['value']);
+        $this->assertSame('••••-key', $response['wema']['api_key']['masked']);
         $this->assertSame(false, $response['wema']['api_key']['overridden']);
+
+        // Non-secret values ARE returned in full (the form pre-fills them).
+        $this->assertSame(
+            'https://wema-alatdev-apimgt.developer.azure-api.net',
+            $response['wema']['base_url']['value'],
+        );
 
         // All expected groups are present.
         foreach (['wema', 'monnify', 'firebase', 'apple', 'google'] as $group) {
@@ -98,6 +105,28 @@ final class AdminConfigTest extends TestCase
         // And the Wema client now sees the dashboard value.
         $client = new \App\Infrastructure\Providers\Wema\WemaClient(app(AppConfigService::class));
         $this->assertSame('dashboard-key-12345', (new \ReflectionMethod($client, 'apiKey'))->invoke($client));
+    }
+
+    public function test_config_changes_are_audited_without_values(): void
+    {
+        $admin = $this->admin();
+
+        $this->actingAs($admin)
+            ->putJson('/api/v1/admin/config', [
+                'group' => 'monnify',
+                'values' => ['api_key' => 'new-secret-value', 'contract_code' => '1234567890'],
+            ])
+            ->assertOk();
+
+        $this->assertDatabaseHas('audit_logs', [
+            'action' => 'config.updated',
+            'actor_id' => $admin->id,
+        ]);
+
+        $log = \App\Models\AuditLog::where('action', 'config.updated')->latest('id')->first();
+        $this->assertContains('api_key', $log->metadata['keys']);
+        // The secret value itself must not reach the audit trail.
+        $this->assertStringNotContainsString('new-secret-value', (string) json_encode($log->metadata));
     }
 
     public function test_clearing_a_value_falls_back_to_env(): void

@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\V1\Admin;
 
+use App\Domain\Audit\Services\AuditService;
 use App\Domain\Config\Services\AppConfigService;
 use App\Domain\Providers\Enums\ProviderAttemptStatus;
 use App\Domain\Providers\Services\CircuitBreaker;
@@ -25,6 +26,7 @@ class AdminConfigController extends Controller
     public function __construct(
         private readonly AppConfigService $appConfig,
         private readonly CircuitBreaker $circuitBreaker,
+        private readonly AuditService $audit,
     ) {
     }
 
@@ -49,6 +51,14 @@ class AdminConfigController extends Controller
         $values = (array) $request->input('values', []);
 
         $applied = $this->appConfig->set($group, $values, $request->user());
+
+        // Credential/config changes are security-relevant: record WHO changed
+        // WHICH keys (never the values — secrets must not reach the audit
+        // trail or the log).
+        $this->audit->log('config.updated', null, $request->user(), [
+            'group' => $group,
+            'keys' => array_map(fn (string $k): string => (string) (explode('.', $k, 2)[1] ?? $k), $applied),
+        ]);
 
         return ApiResponse::success(
             ['applied' => $applied],
