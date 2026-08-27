@@ -98,7 +98,7 @@ final class BillPaymentService
         });
 
         // --- Provider call (outside the DB transaction) -------------------
-        $providerName = $this->resolveProvider($command->type);
+        $providerName = $this->resolveProvider($command->type, $command->provider);
 
         $response = $this->gateway->purchaseBill(
             $providerName,
@@ -107,7 +107,17 @@ final class BillPaymentService
             $command->amountKobo,
             $transaction->reference,
             $transaction,
+            $command->metadata,
         );
+
+        // Record the provider that took the purchase (the verification
+        // path must always ask the right provider) and persist any
+        // provider follow-up data (e.g. a short provider requestRef
+        // needed for webhooks/status queries) on the metadata.
+        $transaction->update([
+            'provider' => $providerName,
+            'metadata' => $transaction->metadata + $response->providerMetadata,
+        ]);
 
         // --- Atomic outcome application -----------------------------------
         $this->applyOutcome(
@@ -318,8 +328,22 @@ final class BillPaymentService
         });
     }
 
-    private function resolveProvider(TransactionType $type): string
+    private function resolveProvider(TransactionType $type, ?string $override = null): string
     {
+        if ($override !== null && $override !== '') {
+            // Explicit provider selection (e.g. "kuda" for bill rails) —
+            // must be a registered bill provider implementation.
+            if (config("ase.providers.{$override}") === null) {
+                throw new \App\Exceptions\FinancialException(
+                    'PROVIDER_NOT_FOUND',
+                    "No bill provider implementation registered for [{$override}].",
+                    422,
+                );
+            }
+
+            return $override;
+        }
+
         return $this->catalog->resolveProvider($type);
     }
 }

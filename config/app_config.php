@@ -49,6 +49,41 @@ return [
             ],
         ],
 
+        'kuda' => [
+            'label' => 'Kuda (Business API) — bills: airtime, data, betting',
+            'keys' => [
+                'base_url' => [
+                    'label' => 'Base URL (UAT default; production: https://kuda-openapi.kuda.com/v2.1)',
+                    'env' => 'KUDA_BASE_URL',
+                    'config' => 'ase.kuda.base_url',
+                    'default' => 'https://kuda-openapi-uat.kudabank.com/v2.1',
+                ],
+                'api_key' => [
+                    'label' => 'API key (Kuda Business dashboard -> Business API -> API Keys)',
+                    'env' => 'KUDA_API_KEY',
+                    'config' => 'ase.kuda.api_key',
+                    'secret' => true,
+                ],
+                'email' => [
+                    'label' => 'Kuda Business email (token exchange)',
+                    'env' => 'KUDA_BUSINESS_EMAIL',
+                    'config' => 'ase.kuda.email',
+                ],
+                'webhook_username' => [
+                    'label' => 'Webhook username (Kuda dashboard -> Webhooks)',
+                    'env' => 'KUDA_WEBHOOK_USERNAME',
+                    'config' => 'ase.kuda.webhook_username',
+                    'secret' => true,
+                ],
+                'webhook_password' => [
+                    'label' => 'Webhook password (Kuda sends it Base64-encoded)',
+                    'env' => 'KUDA_WEBHOOK_PASSWORD',
+                    'config' => 'ase.kuda.webhook_password',
+                    'secret' => true,
+                ],
+            ],
+        ],
+
         'monnify' => [
             'label' => 'Monnify — funding & payout rails',
             'keys' => [

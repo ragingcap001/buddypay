@@ -122,12 +122,28 @@ class BillController extends Controller
     {
         $user = $request->user('sanctum');
 
+        $metadata = [];
+
+        if ($request->filled('biller')) {
+            $metadata['kuda_bill_item'] = (string) $request->input('biller');
+        }
+
+        if ($request->filled('customer_identifier')) {
+            $metadata['customer_identifier'] = (string) $request->input('customer_identifier');
+        }
+
+        if ($request->filled('customer_name')) {
+            $metadata['customer_name'] = (string) $request->input('customer_name');
+        }
+
         $command = new InitiateBillPayment(
             userId: $user->id,
             type: TransactionType::from((string) $request->input('type')),
             amountKobo: (int) $request->input('amount'),
             idempotencyKey: (string) $request->header('Idempotency-Key'),
             phoneNumber: (string) $request->input('phone'),
+            provider: $request->filled('provider') ? (string) $request->input('provider') : null,
+            metadata: $metadata,
         );
 
         $transaction = $this->billPayments->execute($command);
@@ -140,5 +156,48 @@ class BillController extends Controller
                 default => 'Payment initiated. The outcome will be verified.',
             },
         );
+    }
+
+    /**
+     * GET /api/v1/bills/kuda/catalog?category=airtime|data|betting
+     *
+     * Live Kuda biller/bill-item catalog for a category (pass-through of
+     * Kuda's GET_BILLERS_BY_TYPE). Clients use the returned item
+     * identifiers as `biller` on POST /bills/pay (provider "kuda").
+     */
+    public function kudaCatalog(Request $request): JsonResponse
+    {
+        $category = strtolower((string) $request->query('category', ''));
+
+        $billTypeName = match ($category) {
+            'airtime' => 'airtime',
+            'data', 'internet' => 'internet data',
+            'betting' => 'betting',
+            'electricity' => 'electricity',
+            'cabletv', 'cable_tv' => 'cabletv',
+            '' => null,
+            default => null,
+        };
+
+        if ($billTypeName === null) {
+            return ApiResponse::error(
+                'INVALID_CATEGORY',
+                'category must be one of: airtime, data, betting, electricity, cabletv.',
+                422,
+                $request,
+            );
+        }
+
+        try {
+            $billers = app(\App\Infrastructure\Providers\Kuda\KudaClient::class)
+                ->getBillersByType($billTypeName);
+        } catch (\App\Exceptions\FinancialException $e) {
+            return ApiResponse::error($e->errorCode(), $e->getMessage(), $e->httpStatusCode(), $request);
+        }
+
+        return ApiResponse::success([
+            'category' => $billTypeName,
+            'billers' => $billers,
+        ]);
     }
 }

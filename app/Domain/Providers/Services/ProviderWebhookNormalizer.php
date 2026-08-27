@@ -35,8 +35,67 @@ final class ProviderWebhookNormalizer
         return match ($providerName) {
             'monnify' => $this->normalizeMonnify($payload),
             'wema' => $this->normalizeWema($payload),
+            'kuda' => $this->normalizeKuda($payload),
             default => $this->normalizeGeneric($payload),
         };
+    }
+
+    /**
+     * Kuda `Bill.Transaction` webhook.
+     *
+     * Kuda identifies bills by `BillRequestRef` (our short Kuda requestRef)
+     * and `BillResponseReference` — NOT by the platform reference — and the
+     * notification itself is not a definitive outcome (Kuda says to confirm
+     * with BILL_TSQ). So we resolve the platform transaction from the
+     * stored provider reference and emit a "verify" event that the receiver
+     * settles through the bill verification path.
+     */
+    private function normalizeKuda(array $payload): NormalizedWebhookEvent
+    {
+        $eventType = (string) ($payload['eventType'] ?? '');
+
+        if ($eventType !== 'Bill.Transaction') {
+            // Transaction.Notification and anything else are out of scope
+            // for bill settlement — store and ignore.
+            return new NormalizedWebhookEvent(
+                NormalizedWebhookEvent::IGNORED,
+                (string) ($payload['transactionReference'] ?? ''),
+                null,
+                null,
+                'kuda|'.((string) ($payload['eventType'] ?? 'unknown')).'|'.((string) ($payload['instrumentNumber'] ?? $payload['transactionReference'] ?? '')),
+            );
+        }
+
+        $billRequestRef = (string) ($payload['BillRequestRef'] ?? '');
+        $billResponseReference = (string) ($payload['BillResponseReference'] ?? '');
+
+        // Join to the platform transaction: we store the Kuda bill response
+        // reference as provider_reference and the short requestRef in
+        // metadata.
+        $txn = \App\Models\Transaction::where('provider_reference', $billResponseReference)->first();
+
+        if ($txn === null && $billRequestRef !== '') {
+            $txn = \App\Models\Transaction::where('metadata->kuda_request_ref', $billRequestRef)->first();
+        }
+
+        if ($txn === null) {
+            // No internal record — reconciliation will flag it.
+            return new NormalizedWebhookEvent(
+                NormalizedWebhookEvent::IGNORED,
+                '',
+                $billResponseReference !== '' ? $billResponseReference : null,
+                null,
+                'kuda|Bill.Transaction|'.$billRequestRef.'|'.$billResponseReference,
+            );
+        }
+
+        return new NormalizedWebhookEvent(
+            eventType: 'bill.transaction',
+            reference: (string) $txn->reference,
+            providerReference: $billResponseReference !== '' ? $billResponseReference : null,
+            error: null,
+            eventId: 'kuda|Bill.Transaction|'.$billRequestRef.'|'.$billResponseReference,
+        );
     }
 
     private function normalizeMonnify(array $payload): NormalizedWebhookEvent

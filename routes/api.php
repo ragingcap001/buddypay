@@ -55,6 +55,7 @@ Route::prefix('v1')->group(function (): void {
             Route::get('/categories', [BillController::class, 'categories']);
             Route::get('/providers', [BillController::class, 'providers']);
             Route::get('/products', [BillController::class, 'products']);
+            Route::get('/kuda/catalog', [BillController::class, 'kudaCatalog'])->middleware('throttle:transactions');
             Route::post('/validate', [BillController::class, 'validate'])->middleware('throttle:transactions');
             Route::post('/pay', [BillController::class, 'pay'])
                 ->middleware(['idempotent', 'pin', 'throttle:transactions']);

@@ -21,6 +21,7 @@ final class InitiateBillPayment
         public readonly int $amountKobo,
         public readonly string $idempotencyKey,
         public readonly string $phoneNumber,
+        public readonly ?string $provider = null,
         public readonly array $metadata = [],
     ) {
     }

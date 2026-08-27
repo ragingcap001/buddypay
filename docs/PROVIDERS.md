@@ -206,3 +206,45 @@ MONNIFY_SECRET_KEY=...
 MONNIFY_CONTRACT_CODE=...
 MONNIFY_SOURCE_ACCOUNT=...
 ```
+
+---
+
+## Kuda (Business API v2.1) — bills
+
+- Docs: https://docs.kuda.com/ + `business-support.kuda.com` (Business API)
+- Base URL (UAT): `https://kuda-openapi-uat.kudabank.com/v2.1` · Production: `https://kuda-openapi.kuda.com/v2.1`
+- Auth: `POST {base}/Account/GetToken` with `{ email, apiKey }` returns a **raw JWT** (not JSON), sent as `Authorization: Bearer <jwt>`. The JWT `exp` is decoded and the token cached until shortly before expiry.
+- Envelope: one endpoint for all operations — `{ serviceType, requestRef, data }`.
+
+### Bill operations
+
+| `serviceType` | Purpose |
+| --- | --- |
+| `GET_BILLERS_BY_TYPE` | Billers + purchasable `billItems` (each with a `kudaIdentifier`) for a category |
+| `VERIFY_BILL_CUSTOMER` | Validate a customer reference (phone / meter / card) against a bill item |
+| `ADMIN_PURCHASE_BILL` | Execute the bill payment from the business account |
+| `BILL_TSQ` | Bill status query (final outcome + PIN/token) |
+
+### Categories & the client flow
+
+Supported bill types map: `AIRTIME`→`airtime`, `DATA`→`internet data`, `BETTING`→`betting` (plus `electricity`, `cabletv`).
+
+1. **Discover** — `GET /api/v1/bills/kuda/catalog?category=airtime|data|betting` returns Kuda's live catalog (pass-through of `GET_BILLERS_BY_TYPE`). Each purchasable item carries a `kudaIdentifier`.
+2. **Pay** — `POST /api/v1/bills/pay` with `provider: "kuda"` and the chosen item's identifier as `biller` (plus optional `customer_identifier` / `customer_name`). For airtime only, when no `biller` is supplied the network is inferred from the phone prefix and matched against the catalog; data bundles and bookmakers always require an explicit `biller`.
+3. **Settle** — Kuda bill responses are almost never final on the wire (`K00` = received, `K12` = aggregator pending), so the transaction enters `VERIFYING` with the wallet reservation held. Final status comes from the `Bill.Transaction` webhook (which triggers a `BILL_TSQ`) or `POST /api/v1/transactions/{ref}/verify`.
+
+### References & reconciliation
+
+- `requestRef` must be short/unique/alphanumeric (Kuda guidance), so purchases use a generated `KB{ymdHis}{4alnum}` ref stored on the transaction as `metadata.kuda_request_ref`; Kuda's `BillResponseReference` is stored as `provider_reference`.
+- **Webhook auth**: Kuda sends a plaintext `username` header and a **Base64-encoded** `password` header (NOT HTTP Basic Auth). Configure both in the Kuda dashboard and the admin dashboard / env.
+- Parse Kuda payloads leniently; the webhook is a notification, not a definitive outcome — always confirm with `BILL_TSQ`. `transactionStatus: 3` = completed, `1` = pending.
+
+### Configuration
+
+```env
+KUDA_BASE_URL=https://kuda-openapi-uat.kudabank.com/v2.1
+KUDA_API_KEY=...
+KUDA_BUSINESS_EMAIL=...
+KUDA_WEBHOOK_USERNAME=...
+KUDA_WEBHOOK_PASSWORD=...
+```
