@@ -27,7 +27,7 @@ admin panel.
 | Admin panel | Filament 3 at `/admin`, on its own `admin` session guard |
 | API | REST/JSON, consistent envelope, OpenAPI in `docs/openapi.yaml` |
 | Testing | PHPUnit (unit + feature), PHPStan/Larastan, Pint |
-| CI/CD | **None yet** — see TODO |
+| CI/CD | **Not enabled** — workflow parked at `.github/workflows/ci.yml.disabled` |
 | Local dev | Docker Compose (app, nginx, postgres, redis, horizon) |
 
 ### PHP version pinning
