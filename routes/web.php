@@ -1,22 +1,13 @@
 <?php
 
-use App\Http\Controllers\Admin\Web\AdminAuthController;
-use App\Http\Controllers\Admin\Web\AdminDashboardController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
     return view('welcome');
 });
 
-// Admin dashboard (web session auth; phone + password, admin role).
-Route::prefix('admin')->name('admin.')->group(function (): void {
-    Route::get('/login', [AdminAuthController::class, 'showLogin'])->name('login');
-    Route::post('/login', [AdminAuthController::class, 'login'])
-        ->middleware('throttle:auth')
-        ->name('login.attempt');
-    Route::post('/logout', [AdminAuthController::class, 'logout'])->name('logout');
-
-    Route::get('/', [AdminDashboardController::class, 'index'])
-        ->middleware(['auth', 'admin'])
-        ->name('dashboard');
-});
+// The /admin dashboard is served by the Filament panel
+// (App\Providers\Filament\AdminPanelProvider), which registers its own
+// routes — including login — on the `admin` guard. The previous Blade
+// dashboard was retired in favour of it; the /api/v1/admin/* JSON API
+// (session + EnsureAdmin) is unchanged and still available to clients.

@@ -2,5 +2,6 @@
 
 return [
     App\Providers\AppServiceProvider::class,
-    \Laravel\Horizon\HorizonServiceProvider::class,
+    App\Providers\Filament\AdminPanelProvider::class,
+    Laravel\Horizon\HorizonServiceProvider::class,
 ];

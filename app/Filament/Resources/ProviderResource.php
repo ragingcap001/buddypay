@@ -1,0 +1,141 @@
+<?php
+
+namespace App\Filament\Resources;
+
+use App\Domain\Providers\Services\CircuitBreaker;
+use App\Filament\Resources\ProviderResource\Pages;
+use App\Models\Provider;
+use App\Models\ProviderAttempt;
+use Filament\Forms\Components\Section as FormSection;
+use Filament\Forms\Components\Select;
+use Filament\Forms\Components\TextInput;
+use Filament\Forms\Form;
+use Filament\Infolists\Components\KeyValueEntry;
+use Filament\Infolists\Components\Section;
+use Filament\Infolists\Components\TextEntry;
+use Filament\Infolists\Infolist;
+use Filament\Resources\Resource;
+use Filament\Tables;
+use Filament\Tables\Table;
+
+/**
+ * Provider health, and the one operational lever worth having in a UI:
+ * flipping a provider to DISABLED during an incident (the manual
+ * equivalent of tripping its circuit breaker). The provider set itself is
+ * seeded/migrated, not managed here.
+ */
+class ProviderResource extends Resource
+{
+    protected static ?string $model = Provider::class;
+
+    protected static ?string $navigationIcon = 'heroicon-o-server-stack';
+
+    protected static ?string $navigationGroup = 'Platform';
+
+    protected static ?int $navigationSort = 20;
+
+    public static function form(Form $form): Form
+    {
+        return $form->schema([
+            FormSection::make('Provider')->columns(2)->schema([
+                TextInput::make('display_name')->disabled()->dehydrated(false),
+                TextInput::make('name')->disabled()->dehydrated(false),
+                TextInput::make('type')->disabled()->dehydrated(false),
+                Select::make('status')
+                    ->options([
+                        Provider::STATUS_ACTIVE => 'Active',
+                        Provider::STATUS_DISABLED => 'Disabled',
+                    ])
+                    ->required(),
+                TextInput::make('priority')
+                    ->numeric()
+                    ->required()
+                    ->helperText('Lower runs first when several providers can serve a request.'),
+            ]),
+        ]);
+    }
+
+    public static function table(Table $table): Table
+    {
+        return $table
+            ->columns([
+                Tables\Columns\TextColumn::make('display_name')
+                    ->label('Provider')
+                    ->description(fn (Provider $r): string => $r->name)
+                    ->searchable(),
+                Tables\Columns\TextColumn::make('type')->badge()->color('gray'),
+                Tables\Columns\TextColumn::make('status')
+                    ->badge()
+                    ->color(fn (string $s): string => $s === Provider::STATUS_ACTIVE ? 'success' : 'danger'),
+                Tables\Columns\TextColumn::make('circuit')
+                    ->label('Circuit')
+                    ->state(fn (Provider $r): string => app(CircuitBreaker::class)->state($r->name)->value)
+                    ->badge()
+                    ->color(fn (string $s): string => match (strtoupper($s)) {
+                        'CLOSED' => 'success',
+                        'HALF_OPEN' => 'warning',
+                        'OPEN' => 'danger',
+                        default => 'gray',
+                    }),
+                Tables\Columns\TextColumn::make('attempts_24h')
+                    ->label('Attempts (24h)')
+                    ->state(fn (Provider $r): int => ProviderAttempt::where('provider_id', $r->id)
+                        ->where('created_at', '>=', now()->subDay())
+                        ->count())
+                    ->alignEnd(),
+                Tables\Columns\TextColumn::make('failures_24h')
+                    ->label('Failures (24h)')
+                    ->state(fn (Provider $r): int => ProviderAttempt::where('provider_id', $r->id)
+                        ->where('created_at', '>=', now()->subDay())
+                        ->where('status', 'FAILURE')
+                        ->count())
+                    ->alignEnd()
+                    ->color(fn ($state): string => (int) $state > 0 ? 'danger' : 'gray'),
+                Tables\Columns\TextColumn::make('priority')->sortable(),
+            ])
+            ->defaultSort('priority')
+            ->filters([
+                Tables\Filters\SelectFilter::make('status')->options([
+                    Provider::STATUS_ACTIVE => 'Active',
+                    Provider::STATUS_DISABLED => 'Disabled',
+                ]),
+            ])
+            ->actions([
+                Tables\Actions\ViewAction::make(),
+                Tables\Actions\EditAction::make(),
+            ])
+            ->bulkActions([]);
+    }
+
+    public static function infolist(Infolist $infolist): Infolist
+    {
+        return $infolist->schema([
+            Section::make('Provider')->columns(3)->schema([
+                TextEntry::make('display_name')->label('Name'),
+                TextEntry::make('name')->label('Key'),
+                TextEntry::make('type')->badge(),
+                TextEntry::make('status')->badge(),
+                TextEntry::make('priority'),
+                TextEntry::make('base_url')->label('Base URL')->copyable()->placeholder('—'),
+            ]),
+            Section::make('Config')
+                ->schema([KeyValueEntry::make('config')])
+                ->collapsible()
+                ->collapsed(),
+        ]);
+    }
+
+    public static function getPages(): array
+    {
+        return [
+            'index' => Pages\ListProviders::route('/'),
+            'view' => Pages\ViewProvider::route('/{record}'),
+            'edit' => Pages\EditProvider::route('/{record}/edit'),
+        ];
+    }
+
+    public static function canCreate(): bool
+    {
+        return false;
+    }
+}
