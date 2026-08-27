@@ -259,7 +259,10 @@ final class BillPaymentService
                 // AMBIGUOUS: the reservation stays ACTIVE (funds remain held)
                 // and the transaction moves to VERIFYING. No failover — the
                 // original provider transaction must be verified first.
-                $txn->update(['provider' => $providerName]);
+                $txn->update([
+                    'provider' => $providerName,
+                    'provider_reference' => $providerReference ?? $txn->provider_reference,
+                ]);
 
                 $this->transactions->transition($txn, TransactionStatus::Ambiguous, $error ?? 'provider outcome unknown');
                 $this->transactions->transition($txn, TransactionStatus::Verifying, 'verification scheduled');

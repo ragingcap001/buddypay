@@ -149,10 +149,18 @@ final class WalletService
 
         $wallet = Wallet::whereKey($reservation->wallet_id)->lockForUpdate()->firstOrFail();
 
+        // Both columns must drop in one statement: a reservation can cover
+        // the wallet's entire balance, and lowering control_balance alone
+        // first would momentarily leave reserved > control, tripping the
+        // wallets_balances_valid CHECK constraint.
         $wallet->control_balance -= (int) $reservation->amount;
+        $wallet->reserved_balance -= (int) $reservation->amount;
         $wallet->save();
 
-        $this->settleReservation($reservation, WalletReservationStatus::Committed, 'committed');
+        $reservation->update([
+            'status' => WalletReservationStatus::Committed->value,
+            'committed_at' => now(),
+        ]);
 
         $lines = [
             LedgerLine::debit(SystemAccounts::walletAccountCode($wallet->user_id), (int) $reservation->amount),

@@ -26,24 +26,33 @@ final class ApiResponse
             $payload['message'] = $message;
         }
 
-        $payload['request_id'] = self::requestId();
+        $requestId = self::requestId();
+        $payload['request_id'] = $requestId;
 
-        return response()->json($payload, $status);
+        return response()->json($payload, $status)->header('X-Request-Id', $requestId);
     }
 
     /**
-     * @param  array<string, mixed>  $extra  Extra error details (e.g. validation errors).
+     * The header is set here rather than only in the RequestId middleware:
+     * responses rendered from a thrown exception (auth, validation,
+     * FinancialException) unwind past that middleware's post-$next() line,
+     * so it would never run for exactly the responses support needs to trace.
+     *
+     * @param  array<string, mixed>  $errors  Field-level error details (e.g. validation errors).
      */
-    public static function error(string $code, string $message, int $status, ?Request $request = null, array $extra = []): JsonResponse
+    public static function error(string $code, string $message, int $status, ?Request $request = null, array $errors = []): JsonResponse
     {
+        $requestId = self::requestId();
+
         return response()->json([
             'success' => false,
-            'error' => array_merge([
+            'error' => [
                 'code' => $code,
                 'message' => $message,
-            ], $extra),
-            'request_id' => self::requestId(),
-        ], $status);
+                ...($errors !== [] ? ['errors' => $errors] : []),
+            ],
+            'request_id' => $requestId,
+        ], $status)->header('X-Request-Id', $requestId);
     }
 
     private static function requestId(): string

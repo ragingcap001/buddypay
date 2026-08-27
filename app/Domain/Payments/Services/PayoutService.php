@@ -254,6 +254,10 @@ final class PayoutService
                     'error' => $error,
                 ]);
             } else {
+                // Keep the provider reference even while ambiguous — /verify
+                // has nothing to ask the provider about without it.
+                $txn->update(['provider_reference' => $providerReference ?? $txn->provider_reference]);
+
                 $status = TransactionStatus::from($txn->status);
 
                 if ($status !== TransactionStatus::Verifying) {
