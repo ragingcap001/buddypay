@@ -70,6 +70,18 @@ final class KudaBillProvider implements BillProviderInterface
 
         $payload = $this->client->verifyBillCustomer($billItem, $request->phoneNumber);
 
+        // The documented envelope carries a BOOLEAN `Status`
+        // (`{ Status: false, Message: "..." }` on rejection) — a false
+        // status is a definitive "customer not found".
+        if (KudaClient::findValue($payload, ['status', 'Status']) === false) {
+            return new BillValidationResponse(
+                false,
+                null,
+                null,
+                (string) (KudaClient::firstString($payload, ['message', 'Message', 'error', 'errorMessage']) ?? 'Kuda could not verify the customer'),
+            );
+        }
+
         $status = strtoupper((string) KudaClient::firstString($payload, ['status', 'finalStatus', 'responseCode']));
 
         if (in_array($status, ['FAILED', 'FAILURE', 'INVALID', 'NOTFOUND', 'NOT_FOUND', 'REJECTED', 'ERROR'], true)) {
@@ -81,9 +93,13 @@ final class KudaBillProvider implements BillProviderInterface
             );
         }
 
+        // The documented response nests the name:
+        // `{ StatusCode, Status, Message, Data: { CustomerName } }`.
+        $name = self::firstStringScopes($payload, ['customerName', 'CustomerName', 'Name', 'name']);
+
         return new BillValidationResponse(
             true,
-            KudaClient::firstString($payload, ['customerName', 'CustomerName', 'Name', 'name']),
+            $name,
             null,
             null,
         );
@@ -95,17 +111,32 @@ final class KudaBillProvider implements BillProviderInterface
 
         $requestRef = $this->client->makeRequestRef('KB');
 
-        $payload = $this->client->purchaseBill([
-            'CustomerFirstName' => (string) ($request->metadata['customer_name'] ?? ''),
+        $data = [
             'CustomerIdentifier' => (string) ($request->metadata['customer_identifier'] ?? $request->phoneNumber),
             'PhoneNumber' => $request->phoneNumber,
             'BillItemIdentifier' => $billItem,
             'Amount' => KudaClient::toNairaString($request->amount),
-        ], $requestRef);
+        ];
 
-        $providerReference = KudaClient::firstString($payload, [
+        // CustomerFirstName is not in the public ADMIN_PURCHASE_BILL sample
+        // but is accepted by the lenient data bag; only send it when known.
+        $customerName = trim((string) ($request->metadata['customer_name'] ?? ''));
+
+        if ($customerName !== '') {
+            $data['CustomerFirstName'] = $customerName;
+        }
+
+        $payload = $this->client->purchaseBill($data, $requestRef);
+
+        // The documented purchase response is
+        // `{ Status, Message, Data: { Reference, Pin } }` — Data.Reference
+        // is Kuda's bill response reference (the webhook join key). Flat
+        // shapes carry it as BillResponseReference instead.
+        $providerReference = self::firstStringScopes($payload, [
             'BillResponseReference',
             'billResponseReference',
+            'Reference',
+            'reference',
             'ResponseReference',
             'responseReference',
             'BillRequestRef',
@@ -163,34 +194,45 @@ final class KudaBillProvider implements BillProviderInterface
      *   - transactionStatus: 3 = completed, 1 = pending.
      *   - finalStatus / hasBeenReversed: terminal descriptors.
      *
-     * Anything unrecognised is AMBIGUOUS (verified, never guessed).
+     * Status fields may sit at the top level or nested under `Data` (the
+     * documented envelope); both scopes are searched. Anything
+     * unrecognised — including the documented receipt envelope
+     * `{ Status: true, Message: "...", Data: { Reference, Pin } }` — is
+     * AMBIGUOUS (verified, never guessed).
      *
      * @param  array<string, mixed>  $payload
      */
     private function classifyBillResponse(array $payload): ProviderOutcome
     {
-        if ((bool) (KudaClient::findValue($payload, ['hasBeenReversed', 'HasBeenReversed']) ?? false)) {
-            return ProviderOutcome::DefinitiveFailure;
+        $scopes = self::searchScopes($payload);
+
+        foreach ($scopes as $scope) {
+            if ((bool) (KudaClient::findValue($scope, ['hasBeenReversed', 'HasBeenReversed']) ?? false)) {
+                return ProviderOutcome::DefinitiveFailure;
+            }
         }
 
-        $transactionStatus = KudaClient::findValue($payload, ['transactionStatus', 'TransactionStatus']);
+        foreach ($scopes as $scope) {
+            $transactionStatus = KudaClient::findValue($scope, ['transactionStatus', 'TransactionStatus']);
 
-        if (is_numeric($transactionStatus)) {
-            return match ((int) $transactionStatus) {
-                3 => ProviderOutcome::DefinitiveSuccess,
-                1 => ProviderOutcome::Ambiguous,
-                default => ProviderOutcome::Ambiguous, // unknown numeric state — verify again
-            };
+            if (is_numeric($transactionStatus)) {
+                return match ((int) $transactionStatus) {
+                    3 => ProviderOutcome::DefinitiveSuccess,
+                    default => ProviderOutcome::Ambiguous, // 1 = pending, unknown = verify again
+                };
+            }
         }
 
-        $finalStatus = strtoupper((string) (KudaClient::firstString($payload, ['finalStatus', 'FinalStatus', 'status', 'Status']) ?? ''));
+        foreach ($scopes as $scope) {
+            $finalStatus = strtoupper((string) (KudaClient::firstString($scope, ['finalStatus', 'FinalStatus', 'status', 'Status']) ?? ''));
 
-        if (in_array($finalStatus, ['SUCCESS', 'SUCCESSFUL', 'COMPLETED', 'COMPLETE', 'SUCCESSFULY'], true)) {
-            return ProviderOutcome::DefinitiveSuccess;
-        }
+            if (in_array($finalStatus, ['SUCCESS', 'SUCCESSFUL', 'COMPLETED', 'COMPLETE', 'SUCCESSFULY'], true)) {
+                return ProviderOutcome::DefinitiveSuccess;
+            }
 
-        if (in_array($finalStatus, ['FAILED', 'FAILURE', 'REJECTED', 'DECLINED', 'CANCELLED', 'CANCELED', 'REVERSED', 'ERROR', 'INVALID'], true)) {
-            return ProviderOutcome::DefinitiveFailure;
+            if (in_array($finalStatus, ['FAILED', 'FAILURE', 'REJECTED', 'DECLINED', 'CANCELLED', 'CANCELED', 'REVERSED', 'ERROR', 'INVALID'], true)) {
+                return ProviderOutcome::DefinitiveFailure;
+            }
         }
 
         // K00 = received, K12 = aggregator pending, PENDING, or unknown.
@@ -198,11 +240,52 @@ final class KudaBillProvider implements BillProviderInterface
     }
 
     /**
+     * First non-empty string among candidate keys, searching the payload
+     * top level and then the nested `Data` object (the documented
+     * response envelope).
+     *
+     * @param  array<string, mixed>  $payload
+     * @param  list<string>  $keys
+     */
+    private static function firstStringScopes(array $payload, array $keys): ?string
+    {
+        foreach (self::searchScopes($payload) as $scope) {
+            $value = KudaClient::firstString($scope, $keys);
+
+            if ($value !== null) {
+                return $value;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * The payload itself plus its nested `Data` object (when present) —
+     * the scopes Kuda status/reference fields may live in.
+     *
+     * @param  array<string, mixed>  $payload
+     * @return list<array<string, mixed>>
+     */
+    private static function searchScopes(array $payload): array
+    {
+        $nested = KudaClient::findValue($payload, ['Data', 'data']);
+
+        $scopes = [$payload];
+
+        if (is_array($nested) && $nested !== []) {
+            $scopes[] = $nested;
+        }
+
+        return $scopes;
+    }
+
+    /**
      * @param  array<string, mixed>  $payload
      */
     private function describeOutcome(array $payload, ProviderOutcome $outcome): ?string
     {
-        $code = KudaClient::firstString($payload, ['responseCode', 'ResponseCode', 'kudaResponseCode', 'billerAggregatorStatus', 'BillerAggregatorStatus']);
+        $code = self::firstStringScopes($payload, ['responseCode', 'ResponseCode', 'StatusCode', 'statusCode', 'kudaResponseCode', 'billerAggregatorStatus', 'BillerAggregatorStatus']);
 
         return match ($outcome) {
             ProviderOutcome::DefinitiveSuccess => null,
@@ -280,8 +363,14 @@ final class KudaBillProvider implements BillProviderInterface
     }
 
     /**
-     * Find a purchasable bill item identifier in the Kuda catalog whose
-     * biller matches the network name.
+     * Find a purchasable bill item identifier in the Kuda catalog for a
+     * network.
+     *
+     * Documented catalog shape: a list of billers, each with
+     * `BillItems[]` — the identifier (`kudaIdentifier`, e.g.
+     * `KD-VTU-MTNNG`) lives on the ITEM, not the biller. A biller matches
+     * when its own name or one of its item names contains the network name.
+     * A flat list of bill items (no biller wrapper) is also tolerated.
      */
     private function findCatalogBillItem(string $billTypeName, string $network): ?string
     {
@@ -293,49 +382,55 @@ final class KudaBillProvider implements BillProviderInterface
 
         $normalizedNetwork = (string) preg_replace('/\s+/', '', $network);
 
-        // Catalog entries may be a list of billers (each with billItems) or
-        // a flat list of bill items — parse both leniently.
-        $entries = array_values(array_filter(
-            $billers,
-            static fn ($entry): bool => is_array($entry),
-        ));
+        $billers = array_values(array_filter($billers, is_array));
 
-        foreach ($entries as $entry) {
-            $items = KudaClient::findValue($entry, ['billItems', 'BillItems', 'items', 'Items']);
+        foreach ($billers as $biller) {
+            $billerName = (string) (KudaClient::firstString($biller, ['Name', 'name', 'billerName', 'BillerName', 'Description', 'description']) ?? '');
+            $billerMatches = str_contains(self::normalizeName($billerName), $normalizedNetwork);
 
-            $candidates = is_array($items) ? array_values(array_filter($items, 'is_array')) : [$entry];
+            $items = KudaClient::findValue($biller, ['billItems', 'BillItems', 'items', 'Items']);
+
+            $candidates = (is_array($items) && $items !== [])
+                ? array_values(array_filter($items, is_array))
+                : [$biller];
 
             foreach ($candidates as $candidate) {
-                $name = (string) (KudaClient::firstString($candidate, ['Name', 'name', 'billerName', 'BillerName', 'Description', 'description']) ?? '');
-                $normalizedName = (string) preg_replace('/[^A-Z0-9]/', '', strtoupper($name));
+                $candidateName = (string) (KudaClient::firstString($candidate, ['Name', 'name', 'Description', 'description']) ?? '');
 
-                if ($normalizedName !== '' && str_contains($normalizedName, $normalizedNetwork)) {
-                    $identifier = KudaClient::firstString($candidate, [
-                        'kudaIdentifier',
-                        'KudaIdentifier',
-                        'kudaBillItemIdentifier',
-                        'KudaBillItemIdentifier',
-                        'billItemIdentifier',
-                        'BillItemIdentifier',
-                        'identifier',
-                    ]);
-
-                    if ($identifier === null) {
-                        continue;
-                    }
-
-                    // Reject only UUID-shaped values (biller IDs). Kuda's
-                    // purchasable item identifiers legitimately contain
-                    // dashes, e.g. KD-VTU-MTNNG.
-                    if (preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $identifier)) {
-                        continue;
-                    }
-
-                    return $identifier;
+                if (! $billerMatches && ! str_contains(self::normalizeName($candidateName), $normalizedNetwork)) {
+                    continue;
                 }
+
+                $identifier = KudaClient::firstString($candidate, [
+                    'kudaIdentifier',
+                    'KudaIdentifier',
+                    'kudaBillItemIdentifier',
+                    'KudaBillItemIdentifier',
+                    'billItemIdentifier',
+                    'BillItemIdentifier',
+                    'identifier',
+                ]);
+
+                if ($identifier === null) {
+                    continue;
+                }
+
+                // Reject only UUID-shaped values (biller IDs). Kuda's
+                // purchasable item identifiers legitimately contain
+                // dashes, e.g. KD-VTU-MTNNG.
+                if (preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $identifier)) {
+                    continue;
+                }
+
+                return $identifier;
             }
         }
 
         return null;
+    }
+
+    private static function normalizeName(string $name): string
+    {
+        return (string) preg_replace('/[^A-Z0-9]/', '', strtoupper($name));
     }
 }

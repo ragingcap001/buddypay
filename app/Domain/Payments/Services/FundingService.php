@@ -124,7 +124,9 @@ final class FundingService
         if ($response->paymentDetails !== [] || $transaction->provider === null) {
             $transaction->update([
                 'provider' => $providerName,
-                'metadata' => $transaction->metadata + ['payment_details' => $response->paymentDetails],
+                // `metadata` is a nullable column; the array cast passes
+                // null through, and null + array would fatal.
+                'metadata' => ($transaction->metadata ?? []) + ['payment_details' => $response->paymentDetails],
             ]);
         }
 

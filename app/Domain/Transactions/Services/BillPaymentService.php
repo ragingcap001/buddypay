@@ -116,7 +116,9 @@ final class BillPaymentService
         // needed for webhooks/status queries) on the metadata.
         $transaction->update([
             'provider' => $providerName,
-            'metadata' => $transaction->metadata + $response->providerMetadata,
+            // `metadata` is a nullable column; the array cast passes null
+            // through, and null + array would fatal.
+            'metadata' => ($transaction->metadata ?? []) + $response->providerMetadata,
         ]);
 
         // --- Atomic outcome application -----------------------------------

@@ -333,15 +333,21 @@ final class MonnifyClient
     }
 
     /**
-     * NIP name enquiry.
+     * NIP name enquiry — "Validate Bank Account" in Monnify's docs. Free in
+     * both sandbox and live. The docs direct you to pass the returned
+     * `accountName` as `destinationAccountName` on a transfer; a mismatched
+     * name fails the transfer.
      *
-     * GET /api/v2/transfer/name-enquiry/{bankCode}/{accountNumber}
+     * GET /api/v2/disbursements/account/validate?accountNumber={n}&bankCode={c}
      *
-     * @return array<string, mixed>  accountName, ...
+     * @return array<string, mixed>  accountNumber, accountName, bankCode, bankName
      */
     public function nameEnquiry(string $bankCode, string $accountNumber): array
     {
-        return $this->request('GET', '/api/v2/transfer/name-enquiry/'.rawurlencode($bankCode).'/'.rawurlencode($accountNumber));
+        return $this->request('GET', '/api/v2/disbursements/account/validate', [], [
+            'accountNumber' => $accountNumber,
+            'bankCode' => $bankCode,
+        ]);
     }
 
     /**

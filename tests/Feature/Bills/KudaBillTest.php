@@ -3,6 +3,9 @@
 namespace Tests\Feature\Bills;
 
 use App\Domain\Ledger\Services\LedgerService;
+use App\Domain\Providers\DTOs\BillValidationRequest;
+use App\Domain\Transactions\Enums\TransactionType;
+use App\Infrastructure\Providers\Kuda\KudaBillProvider;
 use App\Models\Transaction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
@@ -247,5 +250,168 @@ final class KudaBillTest extends TestCase
             ])
             ->assertStatus(422)
             ->assertJsonPath('error.code', 'PROVIDER_NOT_FOUND');
+    }
+
+    /**
+     * The GET_BILLERS_BY_TYPE envelope as documented by Kuda:
+     * `{ Status, Message, Data: { Billers: [ ... BillItems ... ] } }`.
+     *
+     * @return array<string, mixed>
+     */
+    private function documentedCatalogShape(): array
+    {
+        return [
+            'Status' => true,
+            'Message' => 'Operation successful!',
+            'Data' => [
+                'Billers' => [
+                    [
+                        'Id' => 'a156efb6-af1e-4cca-b8d9-efc8ce7eb77e',
+                        'Name' => 'MTN NG VTU',
+                        'Description' => 'Airtime',
+                        'BillTypeId' => '22393d6f-e830-4a3a-b1c0-85c6dc007b98',
+                        'BillItems' => [
+                            ['KudaIdentifier' => 'KD-VTU-MTNNG', 'Name' => 'MTN Airtime'],
+                        ],
+                    ],
+                ],
+            ],
+        ];
+    }
+
+    public function test_catalog_endpoint_unwraps_documented_billers_envelope(): void
+    {
+        $this->fakeKuda([
+            'GET_BILLERS_BY_TYPE' => $this->documentedCatalogShape(),
+        ]);
+
+        [$user, $token] = $this->fundedUser(100000);
+
+        $this->withHeaders($this->authHeaders($token))
+            ->getJson('/api/v1/bills/kuda/catalog?category=airtime')
+            ->assertOk()
+            ->assertJsonPath('data.category', 'airtime')
+            ->assertJsonPath('data.billers.0.Name', 'MTN NG VTU')
+            ->assertJsonPath('data.billers.0.BillItems.0.KudaIdentifier', 'KD-VTU-MTNNG');
+    }
+
+    public function test_airtime_auto_resolution_uses_documented_catalog_shape(): void
+    {
+        $this->fakeKuda([
+            'GET_BILLERS_BY_TYPE' => $this->documentedCatalogShape(),
+            'ADMIN_PURCHASE_BILL' => [
+                'responseCode' => 'K00',
+                'BillResponseReference' => 'mtn-auto-1',
+                'message' => 'Request received',
+            ],
+        ]);
+
+        [$user, $token] = $this->fundedUser(500000);
+
+        // No `biller`: 0803… → MTN → resolved from the catalog. The item
+        // identifier lives on the nested BillItems entry in the documented
+        // shape — auto-resolution must find it there.
+        $this->withHeaders(array_merge($this->authHeaders($token), [
+            'Idempotency-Key' => 'kuda-auto-1',
+            'X-Transaction-Pin' => '1234',
+        ]))
+            ->postJson('/api/v1/bills/pay', [
+                'type' => 'AIRTIME',
+                'amount' => 100000,
+                'phone' => '08031234567',
+                'provider' => 'kuda',
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.status', 'VERIFYING');
+
+        Http::assertSent(function ($request) {
+            if (str_contains($request->url(), 'GetToken')) {
+                return false;
+            }
+
+            $body = json_decode($request->body(), true);
+
+            return ($body['serviceType'] ?? '') === 'ADMIN_PURCHASE_BILL'
+                && ($body['data']['BillItemIdentifier'] ?? null) === 'KD-VTU-MTNNG'
+                && ($body['data']['Amount'] ?? null) === '1000'
+                // CustomerFirstName is not part of the documented
+                // ADMIN_PURCHASE_BILL sample — omitted when unknown.
+                && ! array_key_exists('CustomerFirstName', (array) ($body['data'] ?? []));
+        });
+    }
+
+    public function test_purchase_stores_kuda_reference_from_documented_envelope(): void
+    {
+        $this->fakeKuda([
+            // The documented ADMIN_PURCHASE_BILL receipt: nested
+            // Data.Reference is Kuda's bill response reference.
+            'ADMIN_PURCHASE_BILL' => [
+                'Status' => true,
+                'Message' => 'Your bill purchase request is successful',
+                'Data' => ['Reference' => 'BMvgmekaTqPatgIU0', 'Pin' => null],
+            ],
+        ]);
+
+        [$user, $token] = $this->fundedUser(500000);
+
+        $this->withHeaders(array_merge($this->authHeaders($token), [
+            'Idempotency-Key' => 'kuda-ref-1',
+            'X-Transaction-Pin' => '1234',
+        ]))
+            ->postJson('/api/v1/bills/pay', [
+                'type' => 'AIRTIME',
+                'amount' => 100000,
+                'phone' => '08031234567',
+                'provider' => 'kuda',
+                'biller' => 'KD-VTU-MTNNG',
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.status', 'VERIFYING')
+            ->assertJsonPath('data.provider_reference', 'BMvgmekaTqPatgIU0');
+    }
+
+    public function test_validate_customer_reads_documented_envelope(): void
+    {
+        $provider = app(KudaBillProvider::class);
+
+        Http::fake([
+            'kuda-openapi-uat.kudabank.com/v2.1/Account/GetToken' => Http::response($this->fakeJwt()),
+            'kuda-openapi-uat.kudabank.com/*' => Http::response([
+                'StatusCode' => 'k00',
+                'Status' => true,
+                'Message' => 'Operation successful!',
+                'Data' => ['CustomerName' => 'JOHN DOE'],
+            ]),
+        ]);
+
+        $result = $provider->validateCustomer(new BillValidationRequest(
+            providerName: 'kuda',
+            category: TransactionType::Airtime,
+            phoneNumber: '08031234567',
+            metadata: ['kuda_bill_item' => 'KD-VTU-MTNNG'],
+        ));
+
+        $this->assertTrue($result->valid);
+        $this->assertSame('JOHN DOE', $result->customerName);
+
+        // The documented rejection envelope carries a BOOLEAN Status=false.
+        Http::fake([
+            'kuda-openapi-uat.kudabank.com/v2.1/Account/GetToken' => Http::response($this->fakeJwt()),
+            'kuda-openapi-uat.kudabank.com/*' => Http::response([
+                'StatusCode' => 'k01',
+                'Status' => false,
+                'Message' => 'Customer not found',
+            ]),
+        ]);
+
+        $rejected = $provider->validateCustomer(new BillValidationRequest(
+            providerName: 'kuda',
+            category: TransactionType::Airtime,
+            phoneNumber: '08039990002',
+            metadata: ['kuda_bill_item' => 'KD-VTU-MTNNG'],
+        ));
+
+        $this->assertFalse($rejected->valid);
+        $this->assertSame('Customer not found', $rejected->errorMessage);
     }
 }

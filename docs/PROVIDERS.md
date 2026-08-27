@@ -164,7 +164,7 @@ ASE_DEFAULT_PAYOUT_PROVIDER=wema
 | Authorize single transfer (MFA OTP) | `POST /api/v2/disbursements/single/validate-otp` |
 | Resend MFA OTP | `POST /api/v2/disbursements/single/resend-otp` |
 | Single transfer status | `GET /api/v2/disbursements/single/summary?reference={reference}` |
-| NIP name enquiry | `GET /api/v2/transfer/name-enquiry/{bankCode}/{accountNumber}` |
+| NIP name enquiry ("Validate Bank Account" — free, sandbox + live) | `GET /api/v2/disbursements/account/validate?accountNumber={account}&bankCode={bank}` → `responseBody.accountName` (pass it back as `destinationAccountName`; a mismatch fails the transfer) |
 | Disbursement wallet balance | `GET /api/v2/disbursements/wallet-balance?accountNumber={account}` |
 
 ### Mapping
@@ -255,6 +255,21 @@ Supported bill types map: `AIRTIME`→`airtime`, `DATA`→`internet data`, `BETT
 1. **Discover** — `GET /api/v1/bills/kuda/catalog?category=airtime|data|betting` returns Kuda's live catalog (pass-through of `GET_BILLERS_BY_TYPE`). Each purchasable item carries a `kudaIdentifier`.
 2. **Pay** — `POST /api/v1/bills/pay` with `provider: "kuda"` and the chosen item's identifier as `biller` (plus optional `customer_identifier` / `customer_name`). For airtime only, when no `biller` is supplied the network is inferred from the phone prefix and matched against the catalog; data bundles and bookmakers always require an explicit `biller`.
 3. **Settle** — Kuda bill responses are almost never final on the wire (`K00` = received, `K12` = aggregator pending), so the transaction enters `VERIFYING` with the wallet reservation held. Final status comes from the `Bill.Transaction` webhook (which triggers a `BILL_TSQ`) or `POST /api/v1/transactions/{ref}/verify`.
+
+### Request/response shapes (verified against the public Kuda API reference)
+
+- Requests (confirmed field-for-field, case-sensitive):
+  - `GET_BILLERS_BY_TYPE` → `data: { BillTypeName }`
+  - `VERIFY_BILL_CUSTOMER` → `data: { KudaBillItemIdentifier, CustomerIdentification }`
+  - `ADMIN_PURCHASE_BILL` → `data: { Amount (whole-Naira string), BillItemIdentifier, PhoneNumber, CustomerIdentifier }`. We additionally send `CustomerFirstName` when known — it is not in the public sample but rides in the lenient data bag.
+- Documented responses nest their payloads under `Data`; the client parses
+  both that envelope and flat shapes leniently:
+  - `GET_BILLERS_BY_TYPE` → `{ Status, Message, Data: { Billers: [ { Id, Name, Description, BillTypeId, BillItems: [ { KudaIdentifier, Name } ] } ] } }` — the purchasable identifier is on the **bill item**, not the biller (airtime auto-resolution matches the biller or item name against the detected network).
+  - `VERIFY_BILL_CUSTOMER` → `{ StatusCode: "k00", Status, Message, Data: { CustomerName } }` — a boolean `Status: false` is treated as a definitive "customer not found".
+  - `ADMIN_PURCHASE_BILL` → `{ Status: true, Message, Data: { Reference, Pin } }` — `Data.Reference` is Kuda's bill response reference and is stored as `provider_reference` (the webhook join key). The receipt itself is **not** final — `transactionStatus` (via `BILL_TSQ`: `3` = completed, `1` = pending) or the webhook + TSQ settles it.
+- Note: these shapes come from Kuda's public API reference
+  (kudabank.gitbook.io); the Business API v2.1 portal documentation is not
+  publicly reachable, so treat UAT traffic as the final confirmation.
 
 ### References & reconciliation
 
