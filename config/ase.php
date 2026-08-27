@@ -23,6 +23,11 @@ return [
     'wallet' => [
         // Reservations older than this are released by the expirer command.
         'reservation_ttl_minutes' => env('ASE_RESERVATION_TTL_MINUTES', 15),
+        // Payout reservations live longer: NIP settlement can take hours.
+        // If the reservation lapses before the provider confirms, the
+        // transaction FAILS (never silently completes) and reconciliation
+        // must investigate the provider-side payout.
+        'payout_reservation_ttl_hours' => env('ASE_PAYOUT_RESERVATION_TTL_HOURS', 24),
         'expirer_batch_size' => 200,
     ],
 

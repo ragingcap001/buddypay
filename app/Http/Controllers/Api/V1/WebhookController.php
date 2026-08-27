@@ -167,6 +167,30 @@ class WebhookController extends Controller
             return; // Already settled — idempotent no-op.
         }
 
+        // Amount guard (per Monnify's integration guidance): never settle on
+        // a success event whose reported amount does not match what we
+        // initiated. A mismatch means a misrouted/duplicate notification —
+        // log, leave the transaction verifying, and let reconciliation flag
+        // it. (Funding: the customer pays amount + fee; payout: the
+        // disbursement is exactly the amount.)
+        if ($event->amountKobo !== null) {
+            $expected = $txn->type === TransactionType::WalletFunding->value
+                ? (int) $txn->amount + (int) $txn->fee
+                : (int) $txn->amount;
+
+            if ($event->amountKobo !== $expected) {
+                \Illuminate\Support\Facades\Log::critical('Webhook amount mismatch — refusing to settle', [
+                    'provider' => $providerName,
+                    'reference' => $txn->reference,
+                    'expected_kobo' => $expected,
+                    'reported_kobo' => $event->amountKobo,
+                    'event_type' => $event->eventType,
+                ]);
+
+                return;
+            }
+        }
+
         $outcome = match ($event->eventType) {
             'payment.success', 'payout.success' => ProviderOutcome::DefinitiveSuccess,
             'payment.failed', 'payout.failed' => ProviderOutcome::DefinitiveFailure,

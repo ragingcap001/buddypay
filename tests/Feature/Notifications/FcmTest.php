@@ -129,4 +129,64 @@ final class FcmTest extends TestCase
         $this->assertSame(0, $result['failed']);
         $this->assertNotNull($user->pushDevices()->where('token', 'token-a')->first()->last_used_at);
     }
+
+    public function test_permanently_dead_tokens_are_deactivated(): void
+    {
+        $this->configureFirebase();
+
+        $user = User::factory()->create();
+        $user->pushDevices()->createMany([
+            ['platform' => 'ios', 'token' => 'live-token-00000000000000002', 'active' => true],
+            ['platform' => 'android', 'token' => 'dead-token-00000000000000001', 'active' => true],
+        ]);
+
+        Http::fake([
+            'oauth2.googleapis.com/*' => Http::response(['access_token' => 'abc', 'expires_in' => 3600]),
+            // First device (live) delivers; second (dead) is gone from FCM.
+            'fcm.googleapis.com/*' => Http::sequence()
+                ->push(['name' => 'projects/p/messages/m-1'])
+                ->push(['error' => ['code' => 404, 'message' => 'Requested entity was not found.']], 404),
+        ]);
+
+        $result = app(FcmService::class)->sendToUser($user, 'T', 'B');
+
+        $this->assertSame(1, $result['sent']);
+        $this->assertSame(1, $result['failed']);
+        $this->assertFalse((bool) $user->pushDevices()->where('token', 'dead-token-00000000000000001')->first()->active);
+        $this->assertTrue((bool) $user->pushDevices()->where('token', 'live-token-00000000000000002')->first()->active);
+    }
+
+    public function test_notification_flow_delivers_push_and_logs_failure_without_breaking(): void
+    {
+        $this->configureFirebase();
+
+        $user = User::factory()->create();
+        $user->pushDevices()->create([
+            'platform' => 'web', 'token' => 'dead-token-00000000000000003', 'active' => true,
+        ]);
+
+        Http::fake([
+            'oauth2.googleapis.com/*' => Http::response(['access_token' => 'abc', 'expires_in' => 3600]),
+            'fcm.googleapis.com/*' => Http::response([
+                'error' => ['code' => 404, 'message' => 'Requested entity was not found.'],
+            ], 404),
+        ]);
+
+        // Must not throw — the financial flow continues; the PUSH delivery
+        // row records the failure.
+        $notification = app(\App\Domain\Notifications\Services\NotificationService::class)
+            ->send($user->id, 'transaction.completed', 'Title', 'Body');
+
+        $this->assertSame('SENT', $notification->fresh()->status);
+        $this->assertDatabaseHas('notification_deliveries', [
+            'notification_id' => $notification->id,
+            'channel' => 'PUSH',
+            'status' => 'FAILED',
+        ]);
+        $this->assertDatabaseHas('notification_deliveries', [
+            'notification_id' => $notification->id,
+            'channel' => 'LOG',
+            'status' => 'SENT',
+        ]);
+    }
 }

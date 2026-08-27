@@ -82,7 +82,14 @@ final class PayoutService
         // --- Atomic initiation -------------------------------------------
         $transaction = DB::transaction(function () use ($user, $command, $fee, $total, $providerName): Transaction {
             $wallet = $this->wallets->forUser($user->id);
-            $reservation = $this->wallets->reserve($wallet, $total);
+
+            // Payouts get a long-lived reservation (NIP can take hours).
+            $reservation = $this->wallets->reserve(
+                $wallet,
+                $total,
+                null,
+                now()->addHours((int) config('ase.wallet.payout_reservation_ttl_hours', 24)),
+            );
 
             $txn = $this->transactions->create([
                 'reference' => ReferenceGenerator::transaction(),
@@ -214,17 +221,43 @@ final class PayoutService
             $reservationActive = $reservation !== null && $reservation->status === \App\Domain\Wallet\Enums\WalletReservationStatus::Active->value;
 
             if ($outcome === ProviderOutcome::DefinitiveSuccess) {
-                if ($reservationActive) {
-                    // DR customer wallet (amount + fee)
-                    // CR provider payable (amount)
-                    // CR fee revenue (fee)
-                    $this->wallets->commit(
-                        $reservation,
-                        $amountKobo,
-                        SystemAccounts::PROVIDER_PAYABLE,
-                        $fee,
+                if (! $reservationActive) {
+                    // The reservation lapsed (TTL) before the provider
+                    // confirmed. The external payout may have completed from
+                    // the provider float — we cannot book it against a
+                    // released reservation. Fail the transaction LOUDLY
+                    // (never mark it COMPLETED without ledger entries) and
+                    // flag it for reconciliation.
+                    \Illuminate\Support\Facades\Log::critical(
+                        'Payout confirmed after its reservation lapsed — reconciliation required',
+                        [
+                            'reference' => $txn->reference,
+                            'provider' => $providerName,
+                            'provider_reference' => $providerReference,
+                            'amount_kobo' => $amountKobo,
+                        ],
                     );
+
+                    $this->transactions->transition($txn, TransactionStatus::Failed, 'reservation lapsed before provider confirmation (reconcile)');
+
+                    $this->outbox->record('transaction', $txn->id, 'transaction.failed', [
+                        'reference' => $txn->reference,
+                        'type' => TransactionType::BankTransfer->value,
+                        'error' => 'reservation lapsed before provider confirmation',
+                    ]);
+
+                    return;
                 }
+
+                // DR customer wallet (amount + fee)
+                // CR provider payable (amount)
+                // CR fee revenue (fee)
+                $this->wallets->commit(
+                    $reservation,
+                    $amountKobo,
+                    SystemAccounts::PROVIDER_PAYABLE,
+                    $fee,
+                );
 
                 $txn->update([
                     'provider' => $providerName,

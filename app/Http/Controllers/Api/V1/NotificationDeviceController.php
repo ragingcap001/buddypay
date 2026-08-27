@@ -21,6 +21,9 @@ class NotificationDeviceController extends Controller
 {
     private const PLATFORMS = ['android', 'ios', 'web'];
 
+    /** Per-user device cap (bounds the push fan-out). */
+    private const MAX_DEVICES = 5;
+
     public function store(Request $request): JsonResponse
     {
         $validated = $request->validate([
@@ -30,6 +33,18 @@ class NotificationDeviceController extends Controller
         ]);
 
         $user = /** @var User */ $request->user('sanctum');
+
+        // Re-registering an existing token is fine; a NEW token is capped.
+        $isNew = ! $user->pushDevices()->where('token', $validated['token'])->exists();
+
+        if ($isNew && $user->pushDevices()->count() >= self::MAX_DEVICES) {
+            return ApiResponse::error(
+                'TOO_MANY_DEVICES',
+                "You can register at most ".self::MAX_DEVICES.' push devices. Remove one first.',
+                422,
+                $request,
+            );
+        }
 
         $device = $user->pushDevices()->firstOrCreate(
             ['token' => $validated['token']],

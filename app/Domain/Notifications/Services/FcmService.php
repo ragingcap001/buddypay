@@ -180,6 +180,15 @@ final class FcmService
                 $device->update(['last_used_at' => now()]);
             } else {
                 $failed++;
+
+                // A token FCM reports as not found is permanently dead
+                // (device reinstalled / token rotated) — stop targeting it.
+                $error = (string) $result['error'];
+
+                if (str_contains($error, 'not found') || str_contains($error, 'registration token')) {
+                    $device->update(['active' => false]);
+                }
+
                 Log::info('FCM delivery failed', [
                     'user_id' => $user->id,
                     'device' => $device->id,
