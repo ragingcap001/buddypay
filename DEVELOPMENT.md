@@ -154,7 +154,15 @@ make test                       # composer test (artisan test)
 make analyse                    # phpstan (Larastan) + pint
 ```
 
-There is **no CI pipeline yet** — nothing gates a push. See TODO.
+There is **no CI pipeline running yet** — nothing gates a push.
+
+A ready-to-use workflow is parked at
+`.github/workflows/ci.yml.disabled` (PostgreSQL 16 + Redis 7 services,
+PHP 8.3, `artisan test` + PHPStan + Pint). It is inert two ways: the
+`.disabled` suffix stops GitHub parsing it at all, and the contents are
+commented out. Enabling it is a rename plus an uncomment — the file's
+header has the steps and explains the `--no-security-blocking` flag it
+needs while the framework pin is unresolved.
 
 ## Trying the API end to end (mock providers)
 
@@ -332,10 +340,16 @@ Honest state of the branch, so nobody assumes more than is true.
 
 ### Infrastructure
 
-- [ ] **Add CI.** `.github/workflows/` does not exist; nothing gates a push.
-      The GitHub App lacks `workflows` permission — either grant it or add
-      the workflow file manually (PostgreSQL 16 + Redis 7 services, PHP 8.3,
-      `composer test` + `composer analyse`).
+- [ ] **Turn CI on.** The workflow is written and parked at
+      `.github/workflows/ci.yml.disabled`; nothing gates a push until it is
+      enabled. Blocked on the GitHub App lacking the `workflows` permission —
+      grant it, or commit the enabled file manually from an account that has
+      it. Then: rename to `ci.yml`, uncomment, push.
+  - [ ] Once the framework advisory is resolved, delete the
+        `--no-security-blocking` flag from the install step so new advisories
+        fail the build again.
+  - [ ] Once the codebase has had a Pint sweep, drop `continue-on-error`
+        from the code-style step to make it enforcing.
 - [ ] **Build the Docker image end to end** and confirm the platform pin
       holds inside the container.
 - [ ] `composer analyse` fails project-wide on Pint formatting (pre-existing,
