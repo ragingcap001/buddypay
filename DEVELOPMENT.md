@@ -298,9 +298,20 @@ Honest state of the branch, so nobody assumes more than is true.
 - **The Filament panel has not been exercised against a running database.**
   Routes resolve and the code parses, but no page has been loaded, no form
   saved, and no login performed.
-- **The Kuda integration is not validated against Kuda's own API docs.**
-  `docs.kuda.com` is a client-rendered SPA that cannot be read without a
-  browser, so request/response shapes are as-implemented, not as-specified.
+- **Provider integrations were cross-checked against the public docs on
+  2026-08-27.** Kuda is aligned (auth, envelope, short refs, TSQ-first
+  settlement, webhook headers) — one bug found and fixed: airtime
+  auto-resolution rejected valid dashed identifiers such as `KD-VTU-MTNNG`
+  (now only UUID-shaped values are excluded). Monnify had three contract
+  bugs, all fixed: auth was `POST /api/v1/auth/login` with Basic
+  `base64(apiKey:secretKey)` (not `/api/v2/oauth/token`), checkout is
+  `POST /api/v1/merchant/transactions/init-transaction` with
+  `paymentReference`/`currencyCode` returning `checkoutUrl`, and verify is
+  `GET /api/v2/merchant/transactions/query` reading `paymentStatus`.
+  **Wema needs confirmation of the subscribed product** (see the warning in
+  `docs/PROVIDERS.md`): the code targets the subscription-key ALAT API,
+  while the portal also documents an AES-encrypted NIP Merchant-Payout
+  product. Until Wema confirms, treat Wema traffic as UAT-only.
 - **The Docker image has not been built successfully in this environment.**
   The base-image pull could not complete behind the local proxy. The
   Dockerfile and the platform pin are believed correct but unproven.

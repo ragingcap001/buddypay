@@ -31,16 +31,16 @@ final class MonnifyClientTest extends TestCase
     }
 
     /**
-     * Fake the OAuth token endpoint plus one more pattern in the SAME
+     * Fake the login endpoint plus one more pattern in the SAME
      * Http::fake call (a second call would replace the first fake).
      */
     private function fakeTokenAnd(string $pattern, Closure $callback): void
     {
         Http::fake([
-            'sandbox.monnify.com/api/v2/oauth/token' => Http::response([
+            'sandbox.monnify.com/api/v1/auth/login' => Http::response([
                 'requestSuccessful' => true,
                 'responseCode' => '0',
-                'responseBody' => ['access_token' => 'test-token', 'expires_in' => 120],
+                'responseBody' => ['accessToken' => 'test-token', 'expiresIn' => 3600],
             ]),
             $pattern => $callback,
         ]);
@@ -67,6 +67,18 @@ final class MonnifyClientTest extends TestCase
         Http::assertSentCount(1);
     }
 
+    public function test_login_uses_basic_auth_of_api_and_secret_key(): void
+    {
+        $this->fakeTokenAnd('sandbox.monnify.com/*', fn () => Http::response(['responseBody' => []]));
+
+        app(MonnifyClient::class)->accessToken();
+
+        Http::assertSent(function ($request) {
+            return str_contains($request->url(), '/api/v1/auth/login')
+                && $request->hasHeader('Authorization', 'Basic '.base64_encode('MK_TEST_123:secret-123'));
+        });
+    }
+
     public function test_returns_response_body_on_success(): void
     {
         $this->fakeTokenAnd('sandbox.monnify.com/api/v2/disbursements/single', Http::response([
@@ -80,8 +92,12 @@ final class MonnifyClientTest extends TestCase
         $this->assertSame('PENDING_AUTHORIZATION', $result['status']);
 
         Http::assertSent(function ($request) {
+            $body = json_decode($request->body(), true);
+
+            // amount is a numeric value in NGN major units (2500, not
+            // "2500.00" and not kobo).
             return $request->hasHeader('Authorization', 'Bearer test-token')
-                && json_decode($request->body(), true)['amount'] === '2500.00';
+                && $body['amount'] === 2500;
         });
     }
 

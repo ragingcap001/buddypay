@@ -14,15 +14,15 @@ use Illuminate\Support\Facades\Http;
  *
  * Docs: https://developers.monnify.com/
  *
- * - Authentication: OAuth 2.0 client-credentials Bearer token
- *   (`POST /api/v2/oauth/token` with api_key + contract_code + secret_key).
- *   Tokens are short-lived and cached in the cache store until shortly
- *   before expiry.
+ * - Authentication: `POST /api/v1/auth/login` with
+ *   `Authorization: Basic base64(apiKey:secretKey)` returns a Bearer
+ *   token (`responseBody.accessToken`, valid ~1 hour). Cached until
+ *   shortly before expiry.
  * - Envelope: every response is shaped
  *   `{ requestSuccessful, responseMessage, responseCode, responseBody }`.
  * - Amounts: the Monnify API prices in NGN major units with two decimals
- *   (e.g. 1000.00); the platform prices in integer kobo. Conversion is
- *   pure integer math (`toNairaString`).
+ *   (e.g. 1000.00) as numeric values; the platform prices in integer kobo.
+ *   Conversion is integer math (`toNairaNumber` / `toNairaString`).
  *
  * This class only speaks HTTP — the provider classes above it translate
  * results into the platform's `ProviderOutcome` vocabulary.
@@ -59,27 +59,42 @@ final class MonnifyClient
             .'.'.str_pad((string) ($abs % 100), 2, '0', STR_PAD_LEFT);
     }
 
+    /**
+     * Integer kobo -> NGN major units as a number (int when whole). The
+     * checkout/disbursement APIs take `amount` as a numeric value.
+     */
+    public static function toNairaNumber(int $kobo): int|float
+    {
+        $major = intdiv($kobo, 100);
+        $minor = $kobo % 100;
+
+        return $minor === 0 ? $major : $major + ($minor / 100);
+    }
+
     private function requireCredentials(): void
     {
-        if ($this->val('api_key') === '' || $this->val('contract_code') === '') {
+        if ($this->val('api_key') === '' || $this->val('secret_key') === '') {
             throw new FinancialException(
                 'MONNIFY_NOT_CONFIGURED',
-                'Monnify credentials are not configured (admin dashboard or MONNIFY_API_KEY / MONNIFY_CONTRACT_CODE).',
+                'Monnify credentials are not configured (admin dashboard or MONNIFY_API_KEY / MONNIFY_SECRET_KEY).',
                 503,
             );
         }
     }
 
     /**
-     * OAuth 2.0 client-credentials access token, cached until shortly
-     * before expiry.
+     * Monnify access token via the login endpoint:
+     * `POST /api/v1/auth/login` with `Authorization: Basic
+     * base64(apiKey:secretKey)`. Returns `responseBody.accessToken`
+     * (valid ~1 hour); cached until shortly before expiry.
      */
     public function accessToken(): string
     {
         $this->requireCredentials();
 
         $apiKey = $this->val('api_key');
-        $cacheKey = 'monnify:token:'.substr(hash('sha256', $apiKey), 0, 16);
+        $secretKey = $this->val('secret_key');
+        $cacheKey = 'monnify:token:'.substr(hash('sha256', $apiKey.'|'.$secretKey), 0, 16);
 
         $cached = Cache::get($cacheKey);
 
@@ -88,19 +103,16 @@ final class MonnifyClient
         }
 
         $response = Http::baseUrl($this->val('base_url') !== '' ? $this->val('base_url') : self::DEFAULT_BASE_URL)
-            ->asForm()
+            ->withHeaders(['Authorization' => 'Basic '.base64_encode($apiKey.':'.$secretKey)])
             ->timeout(15)
-            ->post('/api/v2/oauth/token', [
-                'grant_type' => 'client_credentials',
-                'api_key' => $apiKey,
-                'contract_code' => $this->val('contract_code'),
-                'secret_key' => $this->val('secret_key'),
-            ]);
+            ->post('/api/v1/auth/login');
 
         $envelope = (array) $response->json();
         $body = (array) ($envelope['responseBody'] ?? []);
 
-        if ($response->failed() || (bool) ($envelope['requestSuccessful'] ?? false) === false || ! isset($body['access_token'])) {
+        $token = (string) ($body['accessToken'] ?? $body['access_token'] ?? '');
+
+        if ($response->failed() || (bool) ($envelope['requestSuccessful'] ?? false) === false || $token === '') {
             throw new FinancialException(
                 'MONNIFY_TOKEN_ERROR',
                 'Unable to obtain a Monnify access token: '.((string) ($envelope['responseMessage'] ?? 'HTTP '.$response->status())),
@@ -108,8 +120,7 @@ final class MonnifyClient
             );
         }
 
-        $token = (string) $body['access_token'];
-        $ttl = max(30, (int) ($body['expires_in'] ?? 120) - 30);
+        $ttl = max(30, (int) ($body['expiresIn'] ?? $body['expires_in'] ?? 3600) - 30);
 
         Cache::put($cacheKey, $token, now()->addSeconds($ttl));
 
@@ -172,20 +183,20 @@ final class MonnifyClient
      * ------------------------------------------------------------------ */
 
     /**
-     * Initialize a one-time payment (bank transfer / card / USSD). The
-     * platform reference becomes Monnify's `paymentReference` — it is the
-     * join key in webhooks and verification.
+     * Initialize a hosted checkout (bank transfer / card / USSD). The
+     * platform reference is sent as Monnify's `paymentReference` — it is
+     * the join key in webhooks and verification.
      *
-     * POST /api/v2/charges/transactions
+     * POST /api/v1/merchant/transactions/init-transaction
      *
-     * @return array<string, mixed>  reference, paymentUrl, status, bankCode, bankName, accountNumber, ...
+     * @return array<string, mixed>  transactionReference, paymentReference, checkoutUrl, ...
      */
-    public function initializeTransaction(int $amountKobo, string $reference, string $customerName, ?string $customerEmail, string $paymentDescription): array
+    public function initializeTransaction(int $amountKobo, string $reference, string $customerName, ?string $customerEmail, string $paymentDescription, ?string $redirectUrl = null): array
     {
         $body = [
-            'amount' => self::toNairaString($amountKobo),
-            'reference' => $reference,
-            'currency' => (string) config('ase.monnify.currency', 'NGN'),
+            'amount' => self::toNairaNumber($amountKobo),
+            'paymentReference' => $reference,
+            'currencyCode' => (string) config('ase.monnify.currency', 'NGN'),
             'customerName' => $customerName,
             'paymentDescription' => $paymentDescription,
             'contractCode' => $this->val('contract_code'),
@@ -196,19 +207,23 @@ final class MonnifyClient
             $body['customerEmail'] = $customerEmail;
         }
 
-        return $this->request('POST', '/api/v2/charges/transactions', $body);
+        if ($redirectUrl !== null && $redirectUrl !== '') {
+            $body['redirectUrl'] = $redirectUrl;
+        }
+
+        return $this->request('POST', '/api/v1/merchant/transactions/init-transaction', $body);
     }
 
     /**
-     * Query a collection transaction's status.
+     * Verify a collection transaction (server-side, authoritative).
      *
-     * GET /api/v2/charges/transactions/{transactionReference}
+     * GET /api/v2/merchant/transactions/query?transactionReference={ref}
      *
-     * @return array<string, mixed>  reference, status (PENDING | PAID | FAILED | EXPIRED), amountPaid, ...
+     * @return array<string, mixed>  transactionReference, paymentReference, paymentStatus (PAID | PARTIALLY_PAID | PENDING | OVERPAID | FAILED), amountPaid, ...
      */
     public function getTransaction(string $transactionReference): array
     {
-        return $this->request('GET', '/api/v2/charges/transactions/'.rawurlencode($transactionReference));
+        return $this->request('GET', '/api/v2/merchant/transactions/query', [], ['transactionReference' => $transactionReference]);
     }
 
     /**
@@ -265,7 +280,7 @@ final class MonnifyClient
         }
 
         $body = [
-            'amount' => self::toNairaString($amountKobo),
+            'amount' => self::toNairaNumber($amountKobo),
             'reference' => $reference,
             'narration' => (string) ($narration ?? 'Transfer'),
             'destinationBankCode' => $bankCode,

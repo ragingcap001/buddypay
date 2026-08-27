@@ -37,27 +37,26 @@ final class MonnifyFundingTest extends TestCase
     }
 
     /**
-     * Fake the Monnify API: OAuth token + initialize transaction.
+     * Fake the Monnify API: login token + init-transaction + query.
      */
-    private function fakeMonnify(string $transactionStatus = 'PAID'): void
+    private function fakeMonnify(string $paymentStatus = 'PAID'): void
     {
         Http::fake(function (HttpRequest $request) {
             $url = $request->url();
 
-            if (str_contains($url, '/api/v2/oauth/token')) {
+            if (str_contains($url, '/api/v1/auth/login')) {
                 return Http::response([
                     'requestSuccessful' => true,
                     'responseMessage' => 'success',
                     'responseCode' => '0',
                     'responseBody' => [
-                        'access_token' => 'test-access-token',
-                        'token_type' => 'Bearer',
-                        'expires_in' => 120,
+                        'accessToken' => 'test-access-token',
+                        'expiresIn' => 3600,
                     ],
                 ]);
             }
 
-            if (str_contains($url, '/api/v2/charges/transactions') && $request->method() === 'POST') {
+            if (str_contains($url, '/api/v1/merchant/transactions/init-transaction') && $request->method() === 'POST') {
                 $body = json_decode($request->body(), true);
 
                 return Http::response([
@@ -65,25 +64,23 @@ final class MonnifyFundingTest extends TestCase
                     'responseMessage' => 'success',
                     'responseCode' => '0',
                     'responseBody' => [
-                        'reference' => 'MNFY_TRX_1',
-                        'paymentUrl' => 'https://pay.monnify.com/checkout/MNFY_TRX_1',
-                        'status' => 'PENDING',
-                        'bankCode' => '232',
-                        'bankName' => 'Sterling Bank',
-                        'accountNumber' => '6000140770',
-                        'amount' => $body['amount'] ?? null,
+                        'transactionReference' => 'MNFY_TRX_1',
+                        'paymentReference' => $body['paymentReference'] ?? '',
+                        'enabledPaymentMethod' => ['ACCOUNT_TRANSFER', 'CARD'],
+                        'checkoutUrl' => 'https://pay.monnify.com/checkout/MNFY_TRX_1',
                     ],
                 ]);
             }
 
-            if (str_contains($url, '/api/v2/charges/transactions')) {
+            if (str_contains($url, '/api/v2/merchant/transactions/query')) {
                 return Http::response([
                     'requestSuccessful' => true,
                     'responseCode' => '0',
                     'responseBody' => [
-                        'reference' => 'MNFY_TRX_1',
-                        'status' => $transactionStatus,
-                        'amountPaid' => '1000.00',
+                        'transactionReference' => 'MNFY_TRX_1',
+                        'paymentStatus' => $paymentStatus,
+                        'amountPaid' => 1000,
+                        'currencyCode' => 'NGN',
                     ],
                 ]);
             }
@@ -126,9 +123,19 @@ final class MonnifyFundingTest extends TestCase
         // Wallet NOT credited until Monnify confirms the payment.
         $this->assertSame(0, (int) $user->wallet->fresh()->control_balance);
 
-        // The platform reference was passed as the Monnify payment reference.
-        Http::assertSent(fn (HttpRequest $r) => str_contains($r->url(), '/api/v2/charges/transactions')
-            && json_decode($r->body(), true)['reference'] === $reference);
+        // The platform reference was sent as Monnify's paymentReference,
+        // with currencyCode and a numeric Naira amount.
+        Http::assertSent(function (HttpRequest $r) use ($reference) {
+            if (! str_contains($r->url(), '/api/v1/merchant/transactions/init-transaction')) {
+                return false;
+            }
+
+            $body = json_decode($r->body(), true);
+
+            return ($body['paymentReference'] ?? null) === $reference
+                && ($body['currencyCode'] ?? null) === 'NGN'
+                && ($body['amount'] ?? null) === 1000;
+        });
     }
 
     public function test_monnify_webhook_confirms_funding(): void

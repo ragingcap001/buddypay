@@ -18,6 +18,10 @@ use Illuminate\Support\Facades\Http;
  *   credentials).
  * - Envelope: every response is shaped
  *   `{ result, errorMessage, errorMessages[], hasError, timeGenerated }`.
+ * - ⚠️ This targets the subscription-key ALAT product. The portal also
+ *   documents an AES-encrypted NIP "Merchant Payout" product (Vendor-ID +
+ *   authenticate/token + /api/WMServices/*) — confirm which product the
+ *   account is subscribed to before real traffic (see docs/PROVIDERS.md).
  *
  * This class only speaks HTTP — the provider classes above it translate
  * results into the platform's `ProviderOutcome` vocabulary. A request that

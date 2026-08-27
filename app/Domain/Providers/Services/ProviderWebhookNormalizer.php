@@ -130,23 +130,41 @@ final class ProviderWebhookNormalizer
                 : null,
             eventId: $rawEventType.'|'.($providerReference !== '' ? $providerReference : $reference),
             // Collections report amountPaid; disbursements report amount.
-            amountKobo: $this->nairaToKobo((string) ($data['amountPaid'] ?? ($data['amount'] ?? ''))),
+            amountKobo: $this->nairaToKobo($data['amountPaid'] ?? ($data['amount'] ?? null)),
         );
     }
 
     /**
-     * "2500.00" -> 250000 (pure integer math); null when not a
-     * major.minor decimal string (e.g. the Wema callback carries no amount).
+     * Naira -> kobo. Accepts the shapes Monnify actually sends: "2500.00"
+     * (string, 2dp), "2500" / 2500 (whole Naira), 2500.5 (float). Pure
+     * integer math where possible; null when unrecognised (e.g. the Wema
+     * callback carries no amount) — the amount guard is then skipped.
      */
-    private function nairaToKobo(string $naira): ?int
+    private function nairaToKobo(mixed $naira): ?int
     {
-        if (! preg_match('/^\d{1,13}\.\d{2}$/', $naira)) {
+        if (is_int($naira)) {
+            return $naira * 100;
+        }
+
+        if (is_float($naira)) {
+            return (int) round($naira * 100);
+        }
+
+        if (! is_string($naira)) {
             return null;
         }
 
-        [$major, $minor] = explode('.', $naira);
+        if (preg_match('/^\d{1,13}\.\d{2}$/', $naira)) {
+            [$major, $minor] = explode('.', $naira);
 
-        return ((int) $major) * 100 + (int) $minor;
+            return ((int) $major) * 100 + (int) $minor;
+        }
+
+        if (preg_match('/^\d{1,13}$/', $naira)) {
+            return ((int) $naira) * 100;
+        }
+
+        return null;
     }
 
     private function normalizeWema(array $payload): NormalizedWebhookEvent

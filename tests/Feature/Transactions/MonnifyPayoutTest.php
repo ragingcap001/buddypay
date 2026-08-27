@@ -53,11 +53,11 @@ final class MonnifyPayoutTest extends TestCase
         Http::fake(function (HttpRequest $request) {
             $url = $request->url();
 
-            if (str_contains($url, '/api/v2/oauth/token')) {
+            if (str_contains($url, '/api/v1/auth/login')) {
                 return Http::response([
                     'requestSuccessful' => true,
                     'responseCode' => '0',
-                    'responseBody' => ['access_token' => 'test-access-token', 'expires_in' => 120],
+                    'responseBody' => ['accessToken' => 'test-access-token', 'expiresIn' => 3600],
                 ]);
             }
 

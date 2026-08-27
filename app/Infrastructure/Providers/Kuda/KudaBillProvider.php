@@ -320,10 +320,18 @@ final class KudaBillProvider implements BillProviderInterface
                         'identifier',
                     ]);
 
-                    if ($identifier !== null && ! str_contains($identifier, '-')) {
-                        // UUIDs are biller IDs, not purchasable item identifiers.
-                        return $identifier;
+                    if ($identifier === null) {
+                        continue;
                     }
+
+                    // Reject only UUID-shaped values (biller IDs). Kuda's
+                    // purchasable item identifiers legitimately contain
+                    // dashes, e.g. KD-VTU-MTNNG.
+                    if (preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $identifier)) {
+                        continue;
+                    }
+
+                    return $identifier;
                 }
             }
         }

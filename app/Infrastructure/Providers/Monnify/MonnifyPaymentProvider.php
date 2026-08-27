@@ -46,12 +46,15 @@ final class MonnifyPaymentProvider implements PaymentProviderInterface
             'Wallet funding',
         );
 
+        // The hosted-checkout response carries Monnify's
+        // transactionReference (the join key for verify + webhooks) and
+        // the checkoutUrl the customer is redirected to.
         return new PaymentChargeResponse(
             ProviderOutcome::Ambiguous,
-            (string) ($result['reference'] ?? $request->transactionReference),
+            (string) ($result['transactionReference'] ?? $request->transactionReference),
             'Awaiting payment',
             [
-                'payment_url' => (string) ($result['paymentUrl'] ?? ''),
+                'payment_url' => (string) ($result['checkoutUrl'] ?? ''),
                 'account_number' => (string) ($result['accountNumber'] ?? ''),
                 'bank' => (string) ($result['bankName'] ?? 'Monnify partner bank'),
                 'bank_code' => (string) ($result['bankCode'] ?? ''),
@@ -63,7 +66,11 @@ final class MonnifyPaymentProvider implements PaymentProviderInterface
     public function verify(string $providerReference): PaymentVerificationResponse
     {
         $result = $this->client->getTransaction($providerReference);
-        $status = strtoupper((string) ($result['status'] ?? ''));
+
+        // The authoritative field is `paymentStatus` (not `status`).
+        // PAID: fulfil. OVERPAID: fulfil (refund/credit the excess).
+        // PARTIALLY_PAID / FAILED: never fulfil. PENDING: re-poll/webhook.
+        $status = strtoupper((string) ($result['paymentStatus'] ?? $result['status'] ?? ''));
 
         return match ($status) {
             'PAID' => new PaymentVerificationResponse(
@@ -71,7 +78,12 @@ final class MonnifyPaymentProvider implements PaymentProviderInterface
                 $providerReference,
                 null,
             ),
-            'FAILED', 'EXPIRED', 'CANCELED' => new PaymentVerificationResponse(
+            'OVERPAID' => new PaymentVerificationResponse(
+                ProviderOutcome::DefinitiveSuccess,
+                $providerReference,
+                'Customer overpaid — review the excess for a refund',
+            ),
+            'FAILED', 'PARTIALLY_PAID', 'EXPIRED', 'CANCELED' => new PaymentVerificationResponse(
                 ProviderOutcome::DefinitiveFailure,
                 null,
                 "Monnify transaction is {$status}",

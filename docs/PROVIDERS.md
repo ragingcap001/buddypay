@@ -51,6 +51,25 @@ in `app/Infrastructure/Providers/` and is wired by name in
 - Auth: subscription key in the `Api-Key` header on every request.
 - Response envelope: `{ result, errorMessage, errorMessages[], hasError, timeGenerated }`.
 
+> **⚠️ Confirm the subscribed product before go-live.** The portal documents
+> two distinct Wema products:
+>
+> 1. **ALAT Developer API** (subscription-key product — this
+>    implementation): `Api-Key` header, clear JSON,
+>    `POST /payments/v1/paymentrequests`, `GET /payments/v1/paymentrequests/{ref}`,
+>    `GET /name-enquiry/v1/name-enquiry/{bank}/{account}`,
+>    `POST /payouts/v2/payouts`, `GET /payouts/v2/payouts/{ref}`.
+> 2. **Merchant Payout (NIP) API** (onboarded-merchant product): `Vendor-ID`
+>    header + Bearer token from `POST /api/Authentication/authenticate`
+>    (username/password), `POST /api/WMServices/NIPNameEnquiry`,
+>    `POST /api/WMServices/NIPFundTransfer`, and **AES-encrypted
+>    (AES/CBC/PKCS5Padding) request and response bodies**.
+>
+> The implementation targets product 1, which matches the portal homepage's
+> "subscribe to a product … unique ID passed with every call" model. If the
+> account is subscribed to product 2 instead, `WemaClient` must be rewritten
+> for the authenticate/token + AES envelope before any real traffic.
+
 ### Endpoints used
 
 | Purpose | Method + path |
@@ -123,19 +142,22 @@ ASE_DEFAULT_PAYOUT_PROVIDER=wema
 
 - Docs: <https://developers.monnify.com/>
 - Base URL: `https://sandbox.monnify.com` (sandbox) / `https://api.monnify.com` (live)
-- Auth: OAuth 2.0 client-credentials Bearer token —
-  `POST /api/v2/oauth/token` with `api_key`, `contract_code`, `secret_key`.
-  Tokens are short-lived and cached in the cache store.
-- Amounts: NGN major units with two decimals (e.g. `1000.00`); the client
-  converts from the platform's integer kobo with pure integer math.
+- Auth: `POST /api/v1/auth/login` with
+  `Authorization: Basic base64(apiKey:secretKey)` → Bearer token
+  (`responseBody.accessToken`, ~1 hour), cached until shortly before expiry.
+- Amounts: NGN major units (numeric, e.g. `1000` or `1000.50`); the client
+  converts from the platform's integer kobo with integer math.
+- Verification: the authoritative field is `paymentStatus`
+  (`PAID` / `PARTIALLY_PAID` / `PENDING` / `OVERPAID` / `FAILED`).
+  `PARTIALLY_PAID` never fulfils; `OVERPAID` fulfils (refund the excess).
 
 ### Endpoints used
 
 | Purpose | Method + path |
 | --- | --- |
-| OAuth token | `POST /api/v2/oauth/token` |
-| Initialize one-time payment (funding: bank transfer / card / USSD) | `POST /api/v2/charges/transactions` |
-| Collection transaction status | `GET /api/v2/charges/transactions/{reference}` |
+| Login (Bearer token) | `POST /api/v1/auth/login` |
+| Initialize hosted checkout (funding: bank transfer / card / USSD) | `POST /api/v1/merchant/transactions/init-transaction` |
+| Verify collection transaction | `GET /api/v2/merchant/transactions/query?transactionReference={ref}` (or `?paymentReference={ref}`) |
 | Reserve customer virtual account (persistent, per customer) | `POST /api/v2/bank-transfer/reserved-accounts` |
 | Reserved account status | `GET /api/v2/bank-transfer/reserved-accounts/{accountReference}` |
 | Single transfer (payout, async) | `POST /api/v2/disbursements/single` |
@@ -147,11 +169,12 @@ ASE_DEFAULT_PAYOUT_PROVIDER=wema
 
 ### Mapping
 
-- **Funding**: `charge()` initializes a one-time payment whose
+- **Funding**: `charge()` initializes a hosted checkout whose
   `paymentReference` is the platform transaction reference. Monnify returns
-  a `paymentUrl` and (for bank transfer) a virtual account — surfaced to the
-  client via `metadata.payment_details`. Settlement: `SUCCESSFUL_TRANSACTION`
-  webhook (matched on `paymentReference`) or `verify()`.
+  `transactionReference` (stored as `provider_reference`) and `checkoutUrl`
+  (surfaced as `metadata.payment_details.payment_url`). Settlement:
+  `SUCCESSFUL_TRANSACTION` webhook (matched on `paymentReference`) or
+  `verify()` (queries by `transactionReference`, reads `paymentStatus`).
   The Customer Reserved Account API is available on the client for the
   persistent-per-customer virtual account product; the one-time flow keeps a
   1:1 mapping to platform transactions.
