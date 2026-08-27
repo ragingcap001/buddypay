@@ -50,7 +50,7 @@ final class MonnifyPayoutTest extends TestCase
 
     private function fakeMonnify(string $transferStatus = 'PENDING_AUTHORIZATION'): void
     {
-        Http::fake(function (HttpRequest $request): \Illuminate\Http\Client\Response {
+        Http::fake(function (HttpRequest $request) {
             $url = $request->url();
 
             if (str_contains($url, '/api/v2/oauth/token')) {
@@ -146,7 +146,7 @@ final class MonnifyPayoutTest extends TestCase
             'monnify-signature' => $signed['signature'],
         ])->assertOk()->assertJsonPath('data.status', 'PROCESSED');
 
-        $this->assertSame('COMPLETED', Transaction::where('reference', $reference)->fresh()->status);
+        $this->assertSame('COMPLETED', Transaction::where('reference', $reference)->first()->fresh()->status);
         $this->assertSame(1000000 - 252600, (int) $user->wallet->fresh()->control_balance);
         $this->assertTrue(app(LedgerService::class)->integrityReport()['balanced']);
     }
@@ -182,7 +182,7 @@ final class MonnifyPayoutTest extends TestCase
             'monnify-signature' => $signed['signature'],
         ])->assertOk();
 
-        $this->assertSame('COMPLETED', Transaction::where('reference', $reference)->fresh()->status);
+        $this->assertSame('COMPLETED', Transaction::where('reference', $reference)->first()->fresh()->status);
         $this->assertSame(1000000 - 252600, (int) $user->wallet->fresh()->control_balance);
     }
 

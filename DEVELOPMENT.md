@@ -312,29 +312,37 @@ Honest state of the branch, so nobody assumes more than is true.
 
 ### Blocking a green build
 
-- [ ] **Fix the test fixtures (~15 bugs).** These fail for reasons unrelated
-      to the app code:
-  - `Transaction::where(...)->fresh()` — `fresh()` is a model method, needs
-    `->first()` first (several files).
-  - `Http::fake()` closures typed `: Response` — `Http::response()` returns
-    a promise, so every fake throws before the test body runs.
-  - The same closures reference enclosing variables without `use (...)`.
-  - `MoneyTest`: `Money::naira(1).isLessThan(...)` — `.` should be `->`.
-  - `CircuitBreakerTest` / `FeeCalculationTest` override `setUp()` without
-    `parent::setUp()`, so the container never boots and `config()` fails.
-  - Wema tests never set `ase.wema.api_key`, so the real client refuses
-    before the HTTP fake engages.
-  - Webhook signature tests don't seed the provider row, so the handler
-    404s before signature validation runs.
-  - `BankTransferTest` sets `ase.mock.payout_mode` but never sends
-    `"provider": "mock"`, so it exercises the real Wema rail.
-  - `KycFlowTest` document upload sends JSON headers on a multipart request,
-    dropping the `type` field.
-  - `HealthTest` points the DB at a nonexistent database and never restores
-    it, so `RefreshDatabase` teardown fails.
-  - Tests that authenticate as two users in one method need
-    `Auth::forgetGuards()` between requests — Sanctum's `RequestGuard`
-    memoizes the first resolved user for the life of the guard.
+- [x] **Fix the test fixtures (~15 bugs).** These fail for reasons unrelated
+      to the app code — all fixed (2026-08-27), pending a green run:
+  - [x] `Transaction::where(...)->fresh()` — `fresh()` is a model method,
+    needs `->first()` first (15 call sites across 8 test files).
+  - [x] `Http::fake()` closures typed `: Response` — `Http::response()`
+    returns a Guzzle promise, so every typed fake threw a TypeError before
+    the test body ran (4 closures).
+  - [x] The same closures reference enclosing variables without `use
+    (...)` — audited; the only closure with an external variable
+    (`KudaBillTest::fakeKuda`) already had `use ($byServiceType)`.
+  - [x] `MoneyTest`: `Money::naira(1).isLessThan(...)` — `.` should be `->`.
+  - [x] `CircuitBreakerTest` / `FeeCalculationTest` override `setUp()`
+    without `parent::setUp()`, so the container never boots and `config()`
+    fails.
+  - [x] Wema tests never set `ase.wema.api_key`, so the real client refused
+    before the HTTP fake engaged (set in both Wema test `setUp()`s).
+  - [x] Webhook signature tests don't seed the provider row, so the handler
+    404s before signature validation runs (`WebhookTest` now seeds
+    `ProviderSeeder`).
+  - [x] `BankTransferTest` sets `ase.mock.payout_mode` but never sends
+    `"provider": "mock"`, so it exercised the real Wema rail (all 8 payout
+    bodies now pin the mock rail).
+  - [x] `KycFlowTest` document upload sent JSON headers on a multipart
+    request, dropping the file (upload now sends without Content-Type).
+  - [x] `HealthTest` pointed the DB at a nonexistent database and never
+    restored it, so `RefreshDatabase` teardown failed (config restored in
+    `finally`).
+  - [x] Tests that authenticate as two users in one method need
+    `Auth::forgetGuards()` between requests — audited: the two affected
+    tests (`IdempotencyTest`, `PushTest`) use explicit per-request Bearer
+    tokens, not `actingAs()`, so no guard memoization applies.
 - [ ] Run `migrate:fresh --seed` + the full suite and get it green.
 - [ ] Load `/admin`, log in, and exercise each resource and the config form.
 

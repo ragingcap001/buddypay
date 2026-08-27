@@ -137,7 +137,7 @@ final class KudaBillTest extends TestCase
             ->json('data.reference');
 
         // The short Kuda requestRef is persisted for webhooks/TSQ.
-        $txn = Transaction::where('reference', $reference)->fresh();
+        $txn = Transaction::where('reference', $reference)->first()->fresh();
         $kudaRequestRef = $txn->metadata['kuda_request_ref'] ?? null;
         $this->assertIsString($kudaRequestRef);
         $this->assertMatchesRegularExpression('/^KB\d{12}[A-Z0-9]{4}$/', $kudaRequestRef);

@@ -41,7 +41,7 @@ final class MonnifyFundingTest extends TestCase
      */
     private function fakeMonnify(string $transactionStatus = 'PAID'): void
     {
-        Http::fake(function (HttpRequest $request): \Illuminate\Http\Client\Response {
+        Http::fake(function (HttpRequest $request) {
             $url = $request->url();
 
             if (str_contains($url, '/api/v2/oauth/token')) {
@@ -166,7 +166,7 @@ final class MonnifyFundingTest extends TestCase
             'monnify-signature' => $signed['signature'],
         ])->assertOk()->assertJsonPath('data.status', 'PROCESSED');
 
-        $this->assertSame('COMPLETED', Transaction::where('reference', $reference)->fresh()->status);
+        $this->assertSame('COMPLETED', Transaction::where('reference', $reference)->first()->fresh()->status);
         $this->assertSame(100000, (int) $user->wallet->fresh()->control_balance);
         $this->assertTrue(app(LedgerService::class)->integrityReport()['balanced']);
     }
@@ -253,7 +253,7 @@ final class MonnifyFundingTest extends TestCase
         ])->assertOk();
 
         // Still verifying, wallet untouched (reconciliation will flag it).
-        $this->assertSame('VERIFYING', Transaction::where('reference', $reference)->fresh()->status);
+        $this->assertSame('VERIFYING', Transaction::where('reference', $reference)->first()->fresh()->status);
         $this->assertSame(0, (int) $user->wallet->fresh()->control_balance);
     }
 
@@ -284,7 +284,7 @@ final class MonnifyFundingTest extends TestCase
             'monnify-signature' => $signed['signature'],
         ])->assertOk()->assertJsonPath('data.status', 'RECEIVED');
 
-        $this->assertSame('VERIFYING', Transaction::where('reference', $reference)->fresh()->status);
+        $this->assertSame('VERIFYING', Transaction::where('reference', $reference)->first()->fresh()->status);
     }
 
     public function test_verify_endpoint_confirms_monnify_transaction(): void

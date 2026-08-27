@@ -56,6 +56,7 @@ final class BankTransferTest extends TestCase
                 'bank_code' => '035',
                 'account_number' => '0123456789',
                 'account_name' => 'JOHN DOE',
+                'provider' => 'mock',
             ]);
 
         $reference = $response->assertOk()
@@ -94,6 +95,7 @@ final class BankTransferTest extends TestCase
                 'bank_code' => '035',
                 'account_number' => '0123456789',
                 'account_name' => 'JOHN DOE',
+                'provider' => 'mock',
             ]);
 
         $response->assertOk()->assertJsonPath('data.status', 'FAILED');
@@ -116,6 +118,7 @@ final class BankTransferTest extends TestCase
                 'bank_code' => '035',
                 'account_number' => '0123456789',
                 'account_name' => 'JOHN DOE',
+                'provider' => 'mock',
             ])
             ->assertOk()
             ->assertJsonPath('data.status', 'VERIFYING')
@@ -144,6 +147,7 @@ final class BankTransferTest extends TestCase
                 'bank_code' => '035',
                 'account_number' => '0123456789',
                 'account_name' => 'JOHN DOE',
+                'provider' => 'mock',
             ])
             ->assertStatus(422)
             ->assertJsonPath('error.code', 'INSUFFICIENT_BALANCE');
@@ -162,12 +166,13 @@ final class BankTransferTest extends TestCase
                 'bank_code' => '035',
                 'account_number' => '0123456789',
                 'account_name' => 'JOHN DOE',
+                'provider' => 'mock',
             ])
             ->assertOk()
             ->assertJsonPath('data.status', 'VERIFYING')
             ->json('data.reference');
 
-        $txn = Transaction::where('reference', $reference)->fresh();
+        $txn = Transaction::where('reference', $reference)->first()->fresh();
 
         // Simulate the reservation TTL lapsing while the bank was pending:
         // the expirer would have released the funds back to the user.
@@ -207,6 +212,7 @@ final class BankTransferTest extends TestCase
             'bank_code' => '035',
             'account_number' => '0123456789',
             'account_name' => 'JOHN DOE',
+                'provider' => 'mock',
         ];
 
         $first = $this->withHeaders($this->payoutHeaders($token))
@@ -235,6 +241,7 @@ final class BankTransferTest extends TestCase
                 'bank_code' => '035',
                 'account_number' => '0123456789',
                 'account_name' => 'JOHN DOE',
+                'provider' => 'mock',
             ])
             ->assertOk();
 
@@ -244,6 +251,7 @@ final class BankTransferTest extends TestCase
                 'bank_code' => '035',
                 'account_number' => '0123456789',
                 'account_name' => 'JOHN DOE',
+                'provider' => 'mock',
             ])
             ->assertStatus(409)
             ->assertJsonPath('error.code', 'IDEMPOTENCY_KEY_REUSED');

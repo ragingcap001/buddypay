@@ -98,7 +98,7 @@ final class KudaWebhookTest extends TestCase
             ->assertJsonPath('data.status', 'VERIFYING')
             ->json('data.reference');
 
-        $txn = Transaction::where('reference', $reference)->fresh();
+        $txn = Transaction::where('reference', $reference)->first()->fresh();
 
         return [$user, $reference, (string) $txn->metadata['kuda_request_ref']];
     }
@@ -125,7 +125,7 @@ final class KudaWebhookTest extends TestCase
 
         $response->assertOk()->assertJsonPath('data.status', 'PROCESSED');
 
-        $this->assertSame('COMPLETED', Transaction::where('reference', $reference)->fresh()->status);
+        $this->assertSame('COMPLETED', Transaction::where('reference', $reference)->first()->fresh()->status);
         $this->assertSame(500000 - 100500, (int) $user->wallet->fresh()->control_balance);
         $this->assertSame(0, (int) $user->wallet->fresh()->reserved_balance);
         $this->assertTrue(app(LedgerService::class)->integrityReport()['balanced']);
@@ -152,7 +152,7 @@ final class KudaWebhookTest extends TestCase
         ])->assertStatus(401);
 
         // Still verifying.
-        $this->assertSame('VERIFYING', Transaction::where('reference', $reference)->fresh()->status);
+        $this->assertSame('VERIFYING', Transaction::where('reference', $reference)->first()->fresh()->status);
     }
 
     public function test_duplicate_bill_webhook_has_no_double_effect(): void
@@ -199,6 +199,6 @@ final class KudaWebhookTest extends TestCase
         ])->assertOk()->assertJsonPath('data.status', 'RECEIVED');
 
         // Bill still verifying (the unrelated event did not touch it).
-        $this->assertSame('VERIFYING', Transaction::where('reference', $reference)->fresh()->status);
+        $this->assertSame('VERIFYING', Transaction::where('reference', $reference)->first()->fresh()->status);
     }
 }

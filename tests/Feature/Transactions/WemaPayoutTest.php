@@ -21,6 +21,17 @@ final class WemaPayoutTest extends TestCase
     use CreatesVerifiedUser;
     use RefreshDatabase;
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        config([
+            'ase.wema.api_key' => 'wema-test-key',
+            'ase.wema.webhook' => 'https://example.test/api/v1/webhooks/wema',
+        ]);
+    }
+
+
     private const WEMA_SECRET = 'wema-test-secret';
 
     private function fundedUser(int $balanceKobo): array
@@ -39,7 +50,7 @@ final class WemaPayoutTest extends TestCase
 
     private function fakeWema(string $nameEnquiryResult = 'JOHN DOE', string $payoutReference = 'WEMA_PAYOUT_REF'): void
     {
-        Http::fake(function (HttpRequest $request): \Illuminate\Http\Client\Response {
+        Http::fake(function (HttpRequest $request) {
             $url = $request->url();
 
             if (str_contains($url, '/name-enquiry/')) {
@@ -127,7 +138,7 @@ final class WemaPayoutTest extends TestCase
             'X-Webhook-Signature' => hash_hmac('sha256', json_encode($payload), self::WEMA_SECRET),
         ])->assertOk()->assertJsonPath('data.status', 'PROCESSED');
 
-        $txn = Transaction::where('reference', $reference)->fresh();
+        $txn = Transaction::where('reference', $reference)->first()->fresh();
         $this->assertSame('COMPLETED', $txn->status);
 
         // Wallet debited by amount + fee; reservation committed.
@@ -202,7 +213,7 @@ final class WemaPayoutTest extends TestCase
         ])->assertOk()->assertJsonPath('data.status', 'RECEIVED');
 
         // Still verifying; funds still reserved.
-        $this->assertSame('VERIFYING', Transaction::where('reference', $reference)->fresh()->status);
+        $this->assertSame('VERIFYING', Transaction::where('reference', $reference)->first()->fresh()->status);
         $this->assertSame(252600, (int) $user->wallet->fresh()->reserved_balance);
     }
 }

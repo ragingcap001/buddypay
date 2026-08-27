@@ -44,6 +44,10 @@ final class WebhookTest extends TestCase
 
     public function test_invalid_signature_is_rejected(): void
     {
+        // The provider row must exist for the handler to reach signature
+        // validation (unknown providers 404 first).
+        $this->seed(\Database\Seeders\ProviderSeeder::class);
+
         $payload = ['event_type' => 'payment.success', 'event_id' => 'evt-1', 'reference' => 'ASE_T_1'];
 
         $this->postJson('/api/v1/webhooks/mock', $payload, [
@@ -85,7 +89,7 @@ final class WebhookTest extends TestCase
         $response->assertOk()
             ->assertJsonPath('data.status', 'PROCESSED');
 
-        $transaction = Transaction::where('reference', $reference)->fresh();
+        $transaction = Transaction::where('reference', $reference)->first()->fresh();
         $this->assertSame('COMPLETED', $transaction->status);
         $this->assertSame(100000, (int) $user->wallet->fresh()->control_balance);
 

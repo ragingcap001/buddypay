@@ -66,7 +66,12 @@ final class KycFlowTest extends TestCase
     {
         [, $token] = $this->verifiedUser();
 
-        $response = $this->withHeaders($this->authHeaders($token))
+        // No JSON Content-Type here: with a file present the request must be
+        // multipart or the document (and its fields) are dropped.
+        $response = $this->withHeaders([
+            'Accept' => 'application/json',
+            'Authorization' => 'Bearer '.$token,
+        ])
             ->post('/api/v1/kyc/documents', [
                 'document' => \Illuminate\Http\UploadedFile::fake()->create('passport.jpg', 100, 'image/jpeg'),
                 'type' => 'IDENTITY_FRONT',

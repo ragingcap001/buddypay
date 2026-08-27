@@ -21,6 +21,17 @@ final class WemaFundingTest extends TestCase
     use CreatesVerifiedUser;
     use RefreshDatabase;
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        config([
+            'ase.wema.api_key' => 'wema-test-key',
+            'ase.wema.webhook' => 'https://example.test/api/v1/webhooks/wema',
+        ]);
+    }
+
+
     private const WEMA_SECRET = 'wema-test-secret';
 
     private function fundUser(int $amountKobo, string $idempotencyKey): array
@@ -45,7 +56,7 @@ final class WemaFundingTest extends TestCase
      */
     private function fakeWema(string $status = 'COMPLETED', string $virtualAccount = '0310000123'): void
     {
-        Http::fake(function (HttpRequest $request): \Illuminate\Http\Client\Response {
+        Http::fake(function (HttpRequest $request) {
             $url = $request->url();
 
             if (str_contains($url, '/payments/v1/paymentrequests') && $request->method() === 'POST') {
@@ -128,7 +139,7 @@ final class WemaFundingTest extends TestCase
             'X-Webhook-Signature' => $signature,
         ])->assertOk()->assertJsonPath('data.status', 'PROCESSED');
 
-        $transaction = Transaction::where('reference', $reference)->fresh();
+        $transaction = Transaction::where('reference', $reference)->first()->fresh();
         $this->assertSame('COMPLETED', $transaction->status);
         $this->assertSame(100000, (int) $user->wallet->fresh()->control_balance);
         $this->assertTrue(app(LedgerService::class)->integrityReport()['balanced']);
