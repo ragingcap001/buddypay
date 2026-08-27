@@ -40,6 +40,7 @@ class WebhookController extends Controller
     public function __construct(
         private readonly FundingService $funding,
         private readonly PayoutService $payouts,
+        private readonly \App\Domain\Transactions\Services\BillPaymentService $billPayments,
         private readonly ProviderWebhookNormalizer $normalizer,
         private readonly AuditService $audit,
         private readonly \App\Domain\Config\Services\AppConfigService $appConfig,
@@ -141,6 +142,25 @@ class WebhookController extends Controller
             return hash_equals(hash_hmac('sha512', $rawBody, $secret), $signature);
         }
 
+        if ($providerName === 'kuda') {
+            // Kuda does NOT use HTTP Basic Auth: it sends a plaintext
+            // `username` header and a Base64-encoded `password` header.
+            $username = (string) $request->header('username', '');
+            $encodedPassword = (string) $request->header('password', '');
+            $configuredUser = (string) ($this->appConfig->get('kuda', 'webhook_username') ?? '');
+            $configuredPassword = (string) ($this->appConfig->get('kuda', 'webhook_password') ?? '');
+
+            if ($configuredUser === '' || $configuredPassword === '' || $username === '') {
+                return false;
+            }
+
+            $password = base64_decode($encodedPassword, true);
+
+            return hash_equals($configuredUser, $username)
+                && is_string($password)
+                && hash_equals($configuredPassword, $password);
+        }
+
         if ($providerName === 'wema') {
             $secret = (string) ($this->appConfig->get('wema', 'webhook_secret') ?? '');
         } else {
@@ -189,6 +209,15 @@ class WebhookController extends Controller
 
                 return;
             }
+        }
+
+        // Kuda bill webhooks are notifications, not definitive outcomes —
+        // Kuda's own guidance is to confirm with BILL_TSQ. Route to the
+        // bill verification path (TSQ -> settle).
+        if ($event->eventType === 'bill.transaction') {
+            $this->billPayments->verify($event->reference);
+
+            return;
         }
 
         $outcome = match ($event->eventType) {

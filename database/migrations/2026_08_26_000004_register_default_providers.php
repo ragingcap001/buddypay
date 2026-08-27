@@ -37,6 +37,14 @@ return new class extends Migration
                 'status' => 'ACTIVE',
                 'priority' => 20,
             ],
+            [
+                'name' => 'kuda',
+                'type' => 'BILL',
+                'display_name' => 'Kuda Bank (Business API)',
+                'base_url' => config('ase.kuda.base_url'),
+                'status' => 'ACTIVE',
+                'priority' => 20,
+            ],
         ];
 
         foreach ($defaults as $attributes) {
@@ -48,6 +56,6 @@ return new class extends Migration
     {
         // Only the rails this migration introduced — `mock` is owned by the
         // bill catalog seeder (bill_providers FK).
-        Provider::whereIn('name', ['wema', 'monnify'])->delete();
+        Provider::whereIn('name', ['wema', 'monnify', 'kuda'])->delete();
     }
 };

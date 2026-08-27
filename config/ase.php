@@ -93,6 +93,7 @@ return [
     // in the providers table) to its implementation class.
     'providers' => [
         'mock' => \App\Infrastructure\Providers\MockBillProvider::class,
+        'kuda' => \App\Infrastructure\Providers\Kuda\KudaBillProvider::class,
     ],
 
     'default_bill_provider' => env('ASE_DEFAULT_BILL_PROVIDER', 'mock'),
@@ -135,6 +136,20 @@ return [
         'webhook' => env('WEMA_WEBHOOK_URL', ''),
         'timeout_seconds' => 10,
         'connect_timeout_seconds' => 5,
+    ],
+
+    // Kuda Business API (bill payments: airtime, data, betting, ...).
+    // Docs: https://docs.kuda.com/ + business-support.kuda.com (Business API)
+    // UAT base URL for development; production:
+    // https://kuda-openapi.kuda.com/v2.1
+    // Webhook auth: Kuda sends a plaintext `username` header and a
+    // Base64-encoded `password` header — configure both below.
+    'kuda' => [
+        'base_url' => env('KUDA_BASE_URL', 'https://kuda-openapi-uat.kudabank.com/v2.1'),
+        'api_key' => env('KUDA_API_KEY', ''),
+        'email' => env('KUDA_BUSINESS_EMAIL', ''),
+        'webhook_username' => env('KUDA_WEBHOOK_USERNAME', ''),
+        'webhook_password' => env('KUDA_WEBHOOK_PASSWORD', ''),
     ],
 
     // Monnify API (wallet funding + disbursements/payouts).

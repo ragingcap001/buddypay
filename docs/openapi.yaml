@@ -306,6 +306,20 @@ paths:
           schema: { type: string, example: AIRTIME }
       responses:
         "200": { description: Products }
+  /bills/kuda/catalog:
+    get:
+      tags: [bills]
+      summary: Live Kuda biller/bill-item catalog for a category
+      description: Pass-through of Kuda's GET_BILLERS_BY_TYPE. Use the returned item identifiers as `biller` on /bills/pay (provider "kuda").
+      parameters:
+        - name: category
+          in: query
+          required: true
+          schema: { type: string, enum: [airtime, data, betting, electricity, cabletv] }
+      responses:
+        "200": { description: "{ category, billers: [...] }" }
+        "422": { description: INVALID_CATEGORY }
+        "503": { description: KUDA_NOT_CONFIGURED }
   /bills/validate:
     post:
       tags: [bills]
@@ -340,13 +354,17 @@ paths:
                 type: { type: string, enum: [AIRTIME, DATA, ELECTRICITY, CABLE_TV, BETTING, BANK_TRANSFER] }
                 amount: { type: integer, minimum: 10000, description: "Kobo (bill amount, fee added on top)" }
                 phone: { type: string }
+                provider: { type: string, description: "Optional rail override (e.g. mock | kuda)" }
+                biller: { type: string, description: "Kuda bill item identifier (from /bills/kuda/catalog)" }
+                customer_identifier: { type: string, description: "Biller customer reference (phone/meter/wallet id) when != phone" }
+                customer_name: { type: string }
       responses:
         "200": { description: "Transaction (COMPLETED | FAILED | VERIFYING)" }
         "400": { description: IDEMPOTENCY_KEY_REQUIRED | PIN_REQUIRED }
         "401": { description: PIN_INVALID }
         "403": { description: RISK_BLOCKED }
         "409": { description: IDEMPOTENCY_KEY_REUSED | REQUEST_IN_PROGRESS }
-        "422": { description: INSUFFICIENT_BALANCE }
+        "422": { description: "INSUFFICIENT_BALANCE | BILL_ITEM_REQUIRED | PROVIDER_NOT_FOUND" }
   /kyc:
     get:
       tags: [kyc]
