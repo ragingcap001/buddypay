@@ -64,6 +64,18 @@ class AppServiceProvider extends ServiceProvider
             );
         });
 
+        $this->app->singleton(\App\Domain\GiftCards\Services\GiftCardPurchaseService::class, function ($app) {
+            return new \App\Domain\GiftCards\Services\GiftCardPurchaseService(
+                $app->make(WalletService::class),
+                $app->make(TransactionService::class),
+                $app->make(IdempotencyService::class),
+                $app->make(RiskEngine::class),
+                $app->make(ProviderGateway::class),
+                $app->make(OutboxService::class),
+                $app->make(\App\Infrastructure\Providers\ProviderFactory::class),
+            );
+        });
+
         $this->app->singleton(\App\Domain\Payments\Services\FundingService::class, function ($app) {
             return new \App\Domain\Payments\Services\FundingService(
                 $app->make(WalletService::class),

@@ -2,6 +2,7 @@
 
 namespace App\Infrastructure\Providers;
 
+use App\Domain\GiftCards\Contracts\GiftCardProviderInterface;
 use App\Domain\Payments\Contracts\PaymentProviderInterface;
 use App\Domain\Payments\Contracts\PayoutProviderInterface;
 use App\Domain\Providers\Contracts\BillProviderInterface;
@@ -60,6 +61,23 @@ final class ProviderFactory
 
         if (! $instance instanceof PayoutProviderInterface) {
             throw new FinancialException('PROVIDER_NOT_FOUND', "Class [{$class}] does not implement PayoutProviderInterface.", 500);
+        }
+
+        return $instance;
+    }
+
+    public function makeGiftCardProvider(string $name): GiftCardProviderInterface
+    {
+        $class = config("ase.giftcard_providers.{$name}");
+
+        if (! is_string($class)) {
+            throw new FinancialException('PROVIDER_NOT_FOUND', "No gift card provider implementation registered for [{$name}].", 404);
+        }
+
+        $instance = app($class);
+
+        if (! $instance instanceof GiftCardProviderInterface) {
+            throw new FinancialException('PROVIDER_NOT_FOUND', "Class [{$class}] does not implement GiftCardProviderInterface.", 500);
         }
 
         return $instance;

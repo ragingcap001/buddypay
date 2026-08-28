@@ -45,23 +45,10 @@ final class KudaBillProvider implements BillProviderInterface
         'CABLE_TV' => 'cabletv',
     ];
 
-    /**
-     * Conservative NG mobile prefix map (first 3 digits after the leading
-     * 0/234). Ambiguous prefixes are deliberately omitted — an
-     * unknown network declines with BILLER_REQUIRED instead of risking a
-     * wrong biller. Verify against the Kuda catalog before production.
-     *
-     * @var array<string, list<string>>
-     */
-    private const AIRTIME_NETWORKS = [
-        'MTN' => ['803', '806', '813', '814', '816', '903', '906', '913', '916', '700'],
-        'AIRTEL' => ['802', '807', '811', '812', '817', '902', '907', '912', '917', '701'],
-        'GLO' => ['805', '808', '815', '818', '819', '905', '908', '915', '918', '919'],
-        '9MOBILE' => ['809', '804', '707', '709'],
-    ];
-
-    public function __construct(private readonly KudaClient $client)
-    {
+    public function __construct(
+        private readonly KudaClient $client,
+        private readonly \App\Domain\Bills\Services\NetworkDetector $networks,
+    ) {
     }
 
     public function validateCustomer(BillValidationRequest $request): BillValidationResponse
@@ -237,7 +224,7 @@ final class KudaBillProvider implements BillProviderInterface
         }
 
         if ($category === TransactionType::Airtime) {
-            $network = $this->detectAirtimeNetwork($phoneNumber);
+            $network = $this->networks->detect($phoneNumber);
 
             if ($network !== null) {
                 $item = $this->findCatalogBillItem(self::BILL_TYPE_NAMES[TransactionType::Airtime->value], $network);
@@ -253,30 +240,6 @@ final class KudaBillProvider implements BillProviderInterface
             'A Kuda bill item is required for this purchase — pass `biller` from GET /api/v1/bills/kuda/catalog.',
             422,
         );
-    }
-
-    /**
-     * Conservative NG network detection by prefix. Returns null when the
-     * prefix is unknown/ambiguous (caller declines rather than guessing).
-     */
-    private function detectAirtimeNetwork(string $phone): ?string
-    {
-        $digits = preg_replace('/\D/', '', $phone) ?? '';
-
-        // Normalise to the 11-digit 0-prefixed form.
-        if (str_starts_with($digits, '234')) {
-            $digits = '0'.substr($digits, 3);
-        }
-
-        $prefix = substr($digits, 1, 3);
-
-        foreach (self::AIRTIME_NETWORKS as $network => $prefixes) {
-            if (in_array($prefix, $prefixes, true)) {
-                return $network;
-            }
-        }
-
-        return null;
     }
 
     /**

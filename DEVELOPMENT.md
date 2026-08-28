@@ -221,8 +221,9 @@ otherwise `ase.default_payout_provider` sends them at the real Wema rail.
 | --- | --- | --- |
 | `mock` | bills, funding, payouts (dev/test) | default in local |
 | `wema` | funding (payment requests) + payouts | `ASE_DEFAULT_PAYOUT_PROVIDER` |
-| `monnify` | funding (bank transfer in) + disbursements | per-request / config |
-| `kuda` | bills — airtime, data, betting | `"provider": "kuda"` on `POST /bills/pay` |
+| `monnify` | funding (one-time bank transfer account) + disbursements | per-request / config |
+| `kuda` | bills — airtime, data, electricity, betting, cable | `"provider": "kuda"` on `POST /bills/pay`, default for `/v1/{airtime,data,electricity,betting,cable}/*` |
+| `reloadly` | gift cards | `ase.default_giftcard_provider` |
 
 All external calls funnel through `ProviderGateway`, which enforces
 provider status and the circuit breaker, records a `provider_attempts` row
@@ -282,32 +283,152 @@ Delivered in phases, each reviewed before the next starts:
   "solely for the in-app section", per the contract, so it exists even
   for a user who never opted into push.
 
-**Known gap left for Phase 2**: `RequirePin` (the middleware gating
-wallet/fund, wallet/payout, bills/pay) reads the PIN from an
-`X-Transaction-Pin` **header**; the contract's purchase payloads
-(airtime/data/electricity/betting/cable/giftcard) all send `"pin"` in the
-**JSON body**. This has to be reconciled when those routes are rebuilt —
-not touched yet since Phase 1 doesn't add any of those routes.
+**Phase 2 (done)** — dedicated purchase routes for airtime, data,
+electricity, betting, cable, sitting alongside (not replacing) the
+generic `POST /v1/bills/pay`; the contract-shaped `/v1/user/transactions`
+list. All of it calls the same `BillPaymentService`/`ProviderGateway`
+underneath — no change to reservation, ledger, state-machine or
+provider-attempt behaviour.
 
-**Phase 1 placeholders, not yet wired**: `GET /v1/user/profile`'s
-`transactions` and `walletFundings` arrays are hardcoded `[]`. The
-contract's transaction-list shape (`serviceName`, `beneficiary`,
-`oldBalance`/`newBalance`, per-type `details`) needs fields the
-`Transaction` model doesn't have yet, and wiring it up depends on the
-Phase 2 purchase flows that will populate them.
+- **`RequirePin` now accepts the PIN from either place** — the
+  `X-Transaction-Pin` header (unchanged, still used by wallet/fund,
+  wallet/payout, bills/pay) or a `pin` field in the JSON body (what every
+  new purchase route sends), header taking priority if both are present.
+- **No Idempotency-Key header exists in this contract** for any purchase
+  route. Rather than drop duplicate-submission protection,
+  `SyntheticIdempotencyKey` derives a key from a hash of the request body
+  itself — an identical resubmission (the double-tap this exists to catch)
+  hashes the same and is short-circuited by the existing
+  `IdempotencyService`; a genuinely different purchase hashes differently
+  and proceeds. No client cooperation required, and `/v1/bills/pay`'s
+  header-based flow is untouched.
+- **`/v1/user/transactions` and `/v1/user/transactions/{transId}` are
+  scoped to bill-payment types only** (airtime/data/electricity/betting/
+  cable) — matching every example the contract gives for this endpoint.
+  Wallet funding gets its own history endpoint in Phase 3.
+  `oldBalance`/`newBalance` are captured once, in `BillPaymentService`'s
+  atomic-initiation block, as the wallet's available balance immediately
+  before/after the reservation — and never revised afterwards, including
+  on a later failure/release. That isn't a shortcut: the contract's own
+  example rows show a *failed* electricity purchase still carrying the
+  balance drop from its (since-reversed) reservation, which is exactly
+  what this produces.
+- **`GET /v1/user/profile`'s `transactions` now returns the 5 most recent
+  bill-payment transactions**, through the same `MobileTransactionResource`
+  shape as `/v1/user/transactions`. `walletFundings` stays `[]` — there's
+  no funding-history table to query yet; that's Phase 3.
+- **Kuda catalog field names for a biller's icon/min/max amount are
+  best-effort, unconfirmed guesses** (`MobileCatalogService`), following
+  the exact same lenient multi-key-candidate pattern already used
+  elsewhere in the Kuda integration — same caveat already recorded above
+  for the rest of Kuda, now extended to these fields specifically.
+- **Electricity's async token delivery is not wired up.** The purchase
+  response's `token` field is always present (per contract) but always
+  `null` — Kuda delivers it later via TSQ/webhook, and backfilling it
+  requires adding a `providerMetadata` field to `BillVerificationResponse`
+  (verification currently only returns outcome/reference/error). Scoped
+  out rather than half-built.
+- **`transId` in the contract is the transaction's existing `reference`
+  field, unchanged** (`ASE_T_<ulid>`, not UUID-shaped like the contract's
+  own examples). Reshaping `ReferenceGenerator` to emit UUIDs would touch
+  webhooks, ledger references, audit logs and tests throughout the app for
+  a purely cosmetic win — not worth the blast radius. `transId` is an
+  opaque identifier either way.
+- The dash-guard bug flagged earlier against `KD-VTU-MTNNG`-style
+  identifiers (see the provider cross-check above) turned out to already
+  be fixed in the working tree by the time this phase started — the
+  UUID-shaped check is in place in `KudaBillProvider::findCatalogBillItem`.
+  Network-prefix detection was pulled out into `NetworkDetector` (used by
+  both `KudaBillProvider` and the new `GET /v1/detect-network` endpoint)
+  so the two can't drift apart.
 
-**Phase 2 (pending)** — dedicated purchase routes for airtime, data,
-electricity, betting, cable, replacing the current generic
-`POST /v1/bills/pay`; the contract-shaped `/v1/user/transactions` list.
+**Phase 3 (done)** — wallet funding rework + gift cards.
 
-**Phase 3 (pending)** — wallet funding rework: the contract's
-generate-account/pending-fund/requery/confirm-payment/retry/fundings flow
-is Monnify's **Reserved/Dedicated Virtual Account** product, distinct
-from the hosted-checkout flow `MonnifyClient` currently implements.
-Building against that product is blocked on confirming it's enabled on
-the Monnify account in use. Gift cards (Reloadly) — a new provider
-integration with no existing code to build on — are scoped for this
-phase too.
+- **The Phase 2 checkpoint's premise about wallet funding was wrong, and
+  it's worth recording why.** Before live docs, the contract's
+  generate-account/pending-fund/requery/confirm-payment/retry/fundings
+  flow looked like Monnify's Reserved/Dedicated Virtual Account product,
+  gated on confirming it was enabled on the account in use. Fetching the
+  actual Monnify API reference (2026-08-28) showed that's the wrong
+  product entirely: Reserved Accounts require the customer's **BVN on
+  every creation call** — a hard requirement this contract's flow has no
+  step for collecting, and a persistent per-customer account wouldn't
+  naturally expire every ~40 minutes the way the contract's own examples
+  show. The actual match is Monnify's **"Pay With Bank Transfer"**
+  two-step flow — `POST /api/v1/merchant/transactions/init-transaction`
+  then `POST /api/v1/merchant/bank-transfer/init-payment` — which mints a
+  one-time dynamic account per transaction, no BVN, and whose documented
+  response (`accountDurationSeconds: 2400`, `expiresOn`, `accountNumber`)
+  matches the contract's example values exactly, including the specific
+  2400-second duration. No external product confirmation was actually
+  needed — building this was never blocked.
+- This also exposed a live bug in the already-partially-fixed
+  `MonnifyPaymentProvider`: `charge()` was reading `accountNumber`/
+  `bankName`/`bankCode` off the **first** call's response, which per the
+  verified docs never carries those fields (only the second call does) —
+  so a real funding attempt would have returned an empty account every
+  time. Fixed by adding `MonnifyClient::initBankTransferPayment()` and
+  calling it as the required second step; `MonnifyFundingTest`'s fixture
+  (which already asserted a specific `account_number` no fake ever
+  provided) is corrected to match.
+- New `WalletFundingController` (`/v1/wallet/monnify/*`, 7 routes) is a
+  presentation layer over the existing `FundingService` — the same
+  idempotency/risk/ledger-crediting path every funding rail already uses;
+  `retry` transitions the superseded attempt to `FAILED` and calls
+  `FundingService::execute()` again; `requery`/`confirm-payment` both
+  call the existing `FundingService::verifyReference()` ("ask the
+  provider, never guess"), differing only in response wording per the
+  contract. No `pin` on `/fund` — funding adds money, it doesn't move any
+  out — and no `Idempotency-Key` header, since the contract's payloads
+  never send one; `SyntheticIdempotencyKey` covers it instead, same as
+  Phase 2's purchase routes.
+- **Gift cards (Reloadly)** — a full new provider integration, verified
+  against Reloadly's live API reference (2026-08-28): OAuth2
+  client-credentials against `auth.reloadly.com` (separate from the
+  gift-cards base URL, which becomes the token's `audience`), a new
+  `TransactionType::GiftCard`, `GiftCardProviderInterface` +
+  `ReloadlyGiftCardProvider` wired through `ProviderGateway` exactly like
+  every other provider (circuit breaker, `provider_attempts`, outcome
+  classification — a 4xx from Reloadly is a definitive pre-charge
+  rejection via `ProviderDeclinedException`, matching the same pattern
+  Kuda/Monnify use). `GiftCardPurchaseService` mirrors
+  `BillPaymentService`'s orchestration shape.
+  - **Redemption codes get their own encrypted table**
+    (`gift_card_redemptions`, `card_number`/`pin_code` on the `encrypted`
+    Eloquent cast), not the shared `transactions.metadata` JSON blob every
+    other provider writes to in plain text — a redemption code is the
+    redeemable value itself, the same class of secret as a provider
+    credential in `app_config`.
+  - **Pricing is not a guessed formula.** The contract's per-denomination
+    breakdown (`baseNgnPrice`/`serviceFee`/`total`) uses Reloadly's own
+    `fixedRecipientToSenderDenominationsMap` for FIXED products (exact,
+    no extra call) or a live `GET /fx-rate` call for RANGE products
+    (authoritative, always current) — not a reverse-engineered fee
+    formula. `serviceFee` is this platform's own markup,
+    `config('ase.fees.giftcard')`, same bps/flat pattern as every other
+    transaction type.
+  - **A real state-machine bug was caught and fixed before it ran**: the
+    first draft of `GiftCardPurchaseService::applyOutcome()`'s "still
+    ambiguous" branch tried to transition `VERIFYING → AMBIGUOUS` when
+    re-verifying a still-unresolved purchase — not a legal transition
+    (`TransactionStateMachine` only allows `AMBIGUOUS → VERIFYING`, never
+    the reverse, by design). Every reconciliation pass on a
+    still-ambiguous gift card purchase would have thrown. Fixed to match
+    `BillPaymentService::applyVerification()`'s existing pattern exactly:
+    no-op, stay in `VERIFYING`.
+  - Not built: a "view my redemption code again later" endpoint — the
+    contract only shows the code in the immediate purchase response, and
+    `/v1/user/transactions` (scoped to bill-payment types) doesn't list
+    gift card purchases at all, matching every example the contract gives.
+
+**While this phase was in progress, a teammate pushed a commit
+(`b3925b8`, not yet merged into this branch) deepening Kuda's response
+parsing and fixing `nameEnquiry`** — different code regions than anything
+touched here (Kuda's `validateCustomer`/`purchase`/`classifyBillResponse`/
+`findCatalogBillItem` vs. this phase's `MonnifyClient`/`GiftCards`/
+`WalletFundingController`), so finishing this phase before merging was
+the lower-risk order. Worth a deliberate merge — not a fast-forward, both
+branches have unique commits — before the next phase starts.
 
 ## Money, invariants & safety rules
 

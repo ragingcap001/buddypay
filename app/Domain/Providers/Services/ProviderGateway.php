@@ -2,6 +2,8 @@
 
 namespace App\Domain\Providers\Services;
 
+use App\Domain\GiftCards\DTOs\GiftCardPurchaseRequest;
+use App\Domain\GiftCards\DTOs\GiftCardPurchaseResponse;
 use App\Domain\Payments\DTOs\PaymentChargeRequest;
 use App\Domain\Payments\DTOs\PaymentChargeResponse;
 use App\Domain\Payments\DTOs\PaymentVerificationResponse;
@@ -113,6 +115,50 @@ final class ProviderGateway
         }
 
         return $response;
+    }
+
+    /**
+     * Same audit/circuit-breaker/outcome-classification funnel as
+     * purchaseBill() — a gift card purchase is not itself a "bill", so it
+     * gets its own DTOs, but the same funnel discipline applies.
+     */
+    public function purchaseGiftCard(string $providerName, GiftCardPurchaseRequest $request, ?Transaction $transaction = null): GiftCardPurchaseResponse
+    {
+        $provider = $this->providerModel($providerName);
+
+        if (! $this->circuitBreaker->allowRequest($providerName)) {
+            throw new CircuitOpenException($providerName);
+        }
+
+        $startedAt = microtime(true);
+        $outcome = ProviderOutcome::Ambiguous;
+        $response = null;
+        $error = null;
+
+        try {
+            $giftCardProvider = $this->factory->makeGiftCardProvider($providerName);
+            $response = $giftCardProvider->purchase($request);
+            $outcome = $response->outcome;
+        } catch (Throwable $e) {
+            $outcome = $this->classifier->classifyException($e);
+            $error = $e->getMessage();
+        }
+
+        $this->recordAttempt($provider, $transaction, 'GIFT_CARD_PURCHASE', $outcome, $error, (int) ((microtime(true) - $startedAt) * 1000));
+        $this->updateCircuit($providerName, $outcome);
+
+        if ($response === null) {
+            return new GiftCardPurchaseResponse($outcome, null, $error ?? 'Provider call failed without a response');
+        }
+
+        return $response;
+    }
+
+    public function verifyGiftCard(string $providerName, string $transactionReference): GiftCardPurchaseResponse
+    {
+        $this->providerModel($providerName);
+
+        return $this->factory->makeGiftCardProvider($providerName)->verifyByReference($transactionReference);
     }
 
     public function verifyBill(BillVerificationRequest $request): BillVerificationResponse

@@ -72,6 +72,25 @@ final class MonnifyFundingTest extends TestCase
                 ]);
             }
 
+            // Init-transaction alone carries no account details — those
+            // only come from this second "Pay With Bank Transfer" call.
+            if (str_contains($url, '/api/v1/merchant/bank-transfer/init-payment') && $request->method() === 'POST') {
+                return Http::response([
+                    'requestSuccessful' => true,
+                    'responseMessage' => 'success',
+                    'responseCode' => '0',
+                    'responseBody' => [
+                        'accountNumber' => '6000140770',
+                        'accountName' => 'Test Merchant-Wallet funding',
+                        'bankName' => 'Moniepoint Microfinance Bank',
+                        'bankCode' => '50515',
+                        'accountDurationSeconds' => 2400,
+                        'expiresOn' => now()->addSeconds(2400)->toDateTimeString(),
+                        'transactionReference' => 'MNFY_TRX_1',
+                    ],
+                ]);
+            }
+
             if (str_contains($url, '/api/v2/merchant/transactions/query')) {
                 return Http::response([
                     'requestSuccessful' => true,

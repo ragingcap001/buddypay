@@ -11,7 +11,9 @@ use App\Http\Requests\Auth\VerifyPinRequest;
 use App\Http\Requests\User\ChangePasswordRequest;
 use App\Http\Requests\User\UpdateDeviceTokenRequest;
 use App\Http\Requests\User\UpdateProfileRequest;
+use App\Http\Resources\MobileTransactionResource;
 use App\Http\Resources\UserResource;
+use App\Models\Transaction;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -151,9 +153,14 @@ class UserController extends Controller
                     : '0.00',
             ],
             'kyc' => $kyc !== null ? ['status' => $kyc->status, 'tier' => $kyc->tier] : null,
-            // Wired up once the mobile-contract transaction list (Phase 2)
-            // and wallet-funding history (Phase 3) exist.
-            'transactions' => [],
+            'transactions' => MobileTransactionResource::collection(
+                Transaction::where('user_id', $user->id)
+                    ->whereIn('type', ['AIRTIME', 'DATA', 'ELECTRICITY', 'CABLE_TV', 'BETTING'])
+                    ->orderByDesc('created_at')
+                    ->limit(5)
+                    ->get(),
+            ),
+            // No funding-history table to query yet — Phase 3.
             'walletFundings' => [],
         ];
     }

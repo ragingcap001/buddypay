@@ -73,6 +73,19 @@ final class BillPaymentService
             $wallet = $this->wallets->forUser($user->id);
             $reservation = $this->wallets->reserve($wallet, $total);
 
+            // A reservation moves exactly $total from available to reserved
+            // (control_balance is untouched), so old = new + total holds
+            // regardless of concurrent activity — no second locked read
+            // needed. This is a point-in-time receipt of the balance change
+            // caused by *this* reservation: it is never revised later, even
+            // if the reservation is subsequently released on failure — the
+            // mobile contract's own example transactions show a failed
+            // purchase still carrying the balance drop from its (since
+            // reversed) reservation.
+            $wallet->refresh();
+            $newBalance = $wallet->availableBalance();
+            $oldBalance = $newBalance + $total;
+
             $txn = $this->transactions->create([
                 'reference' => ReferenceGenerator::transaction(),
                 'user_id' => $user->id,
@@ -81,7 +94,11 @@ final class BillPaymentService
                 'amount' => $command->amountKobo,
                 'fee' => $fee,
                 'currency' => config('ase.base_currency', 'NGN'),
-                'metadata' => $command->metadata + ['phone_number' => $command->phoneNumber],
+                'metadata' => $command->metadata + [
+                    'phone_number' => $command->phoneNumber,
+                    'old_balance' => $oldBalance,
+                    'new_balance' => $newBalance,
+                ],
                 'reservation_id' => $reservation->id,
             ]);
 

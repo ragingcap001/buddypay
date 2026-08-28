@@ -87,6 +87,10 @@ return [
         'betting' => ['bps' => 50, 'flat' => 0],
         'bank_transfer' => ['bps' => 100, 'flat' => 100],
         'wallet_funding' => ['bps' => 0, 'flat' => 0],
+        // 200 bps (2%) matches the markup implied by the gift-card
+        // contract's own pricing example (serviceFee is exactly 2% of
+        // baseNgnPrice in both the min and max denomination shown).
+        'giftcard' => ['bps' => 200, 'flat' => 0],
     ],
 
     // Providers known to the platform. Each maps a provider name (as stored
@@ -114,6 +118,14 @@ return [
     ],
 
     'default_payout_provider' => env('ASE_DEFAULT_PAYOUT_PROVIDER', 'wema'),
+
+    // Gift card providers. Each maps a provider name to its implementation
+    // class (App\Domain\GiftCards\Contracts\GiftCardProviderInterface).
+    'giftcard_providers' => [
+        'reloadly' => \App\Infrastructure\Providers\Reloadly\ReloadlyGiftCardProvider::class,
+    ],
+
+    'default_giftcard_provider' => env('ASE_DEFAULT_GIFTCARD_PROVIDER', 'reloadly'),
 
     // Webhook shared secrets per provider (used to verify inbound webhook
     // signatures). NOTE: Monnify signs webhooks with its client secret key
@@ -164,6 +176,17 @@ return [
         'contract_code' => env('MONNIFY_CONTRACT_CODE', ''),
         'source_account_number' => env('MONNIFY_SOURCE_ACCOUNT', ''),
         'currency' => 'NGN',
+    ],
+
+    // Reloadly Gift Cards API. Docs: https://docs.reloadly.com/gift-cards
+    // Sandbox base URL for development; production: https://giftcards.reloadly.com.
+    // Auth is a separate OAuth token exchange against https://auth.reloadly.com
+    // (not the base_url itself) — `audience` on that request must equal
+    // whichever base_url below is in effect.
+    'reloadly' => [
+        'base_url' => env('RELOADLY_BASE_URL', 'https://giftcards-sandbox.reloadly.com'),
+        'client_id' => env('RELOADLY_CLIENT_ID', ''),
+        'client_secret' => env('RELOADLY_CLIENT_SECRET', ''),
     ],
 
     // Mock provider behaviour (development and automated tests only).

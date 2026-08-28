@@ -215,6 +215,28 @@ final class MonnifyClient
     }
 
     /**
+     * "Pay With Bank Transfer" — generates a dynamic, one-time account
+     * number for a SPECIFIC transaction (not a persistent per-customer
+     * account, and no BVN required, unlike createReservedAccount()).
+     * Must be called after initializeTransaction(), using the
+     * `transactionReference` it returned.
+     *
+     * POST /api/v1/merchant/bank-transfer/init-payment
+     *
+     * @return array<string, mixed>  accountNumber, accountName, bankName, bankCode, accountDurationSeconds, expiresOn, transactionReference, amount, ...
+     */
+    public function initBankTransferPayment(string $transactionReference, ?string $bankCode = null): array
+    {
+        $body = ['transactionReference' => $transactionReference];
+
+        if ($bankCode !== null && $bankCode !== '') {
+            $body['bankCode'] = $bankCode;
+        }
+
+        return $this->request('POST', '/api/v1/merchant/bank-transfer/init-payment', $body);
+    }
+
+    /**
      * Verify a collection transaction (server-side, authoritative).
      *
      * GET /api/v2/merchant/transactions/query?transactionReference={ref}

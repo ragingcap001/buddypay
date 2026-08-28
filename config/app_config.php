@@ -84,6 +84,30 @@ return [
             ],
         ],
 
+        'reloadly' => [
+            'label' => 'Reloadly — gift cards',
+            'keys' => [
+                'base_url' => [
+                    'label' => 'Base URL (sandbox default; production: https://giftcards.reloadly.com)',
+                    'env' => 'RELOADLY_BASE_URL',
+                    'config' => 'ase.reloadly.base_url',
+                    'default' => 'https://giftcards-sandbox.reloadly.com',
+                ],
+                'client_id' => [
+                    'label' => 'Client ID (Reloadly dashboard, toggle LIVE/TEST mode first)',
+                    'env' => 'RELOADLY_CLIENT_ID',
+                    'config' => 'ase.reloadly.client_id',
+                    'secret' => true,
+                ],
+                'client_secret' => [
+                    'label' => 'Client secret',
+                    'env' => 'RELOADLY_CLIENT_SECRET',
+                    'config' => 'ase.reloadly.client_secret',
+                    'secret' => true,
+                ],
+            ],
+        ],
+
         'monnify' => [
             'label' => 'Monnify — funding & payout rails',
             'keys' => [

@@ -12,20 +12,22 @@ use App\Domain\Providers\Enums\ProviderOutcome;
  * Monnify wallet-funding provider — one-time payment (bank transfer /
  * card / USSD) initialised server-side.
  *
- * Flow:
- *   1. `charge()` initializes a Monnify transaction whose `paymentReference`
- *      is the platform transaction reference; Monnify returns a checkout
- *      URL and (for bank transfer) a virtual account to pay into.
- *   2. The customer pays asynchronously — `charge()` therefore returns
- *      AMBIGUOUS ("checkout ready, awaiting payment").
- *   3. Settlement arrives via the `SUCCESSFUL_TRANSACTION` webhook (matched
- *      on `paymentReference`) or `verify()` (GET /api/v2/charges/
- *      transactions/{reference}).
- *
- * Note: the Customer Reserved Account API (persistent virtual accounts per
- * customer) is available on the client (`createReservedAccount`) for the
- * recurring-deposit product; the one-time flow above keeps a 1:1 mapping
- * to platform transactions.
+ * Flow (two calls — the first does NOT return account details; only the
+ * second does):
+ *   1. `initializeTransaction()` opens the transaction; Monnify returns
+ *      `transactionReference` (the join key for step 2, verify, and
+ *      webhooks) and a `checkoutUrl`. No account number here — the
+ *      contract's own field names for this were never actually reachable
+ *      before this fix.
+ *   2. `initBankTransferPayment(transactionReference)` — "Pay With Bank
+ *      Transfer" — generates the one-time dynamic account/bank/expiry for
+ *      THIS transaction. No BVN required (unlike Customer Reserved
+ *      Accounts, which mint a *persistent* per-customer account and are a
+ *      different product entirely — not used here).
+ *   3. The customer pays asynchronously — `charge()` therefore returns
+ *      AMBIGUOUS ("account ready, awaiting payment").
+ *   4. Settlement arrives via webhook (matched on `paymentReference`) or
+ *      `verify()` (GET /api/v2/merchant/transactions/query).
  */
 final class MonnifyPaymentProvider implements PaymentProviderInterface
 {
@@ -38,7 +40,7 @@ final class MonnifyPaymentProvider implements PaymentProviderInterface
         $customerName = (string) ($request->metadata['customer_name'] ?? 'Customer');
         $customerEmail = $request->customerEmail ?? (string) ($request->metadata['customer_email'] ?? '');
 
-        $result = $this->client->initializeTransaction(
+        $init = $this->client->initializeTransaction(
             $request->amount,
             $request->transactionReference,
             $customerName,
@@ -46,18 +48,21 @@ final class MonnifyPaymentProvider implements PaymentProviderInterface
             'Wallet funding',
         );
 
-        // The hosted-checkout response carries Monnify's
-        // transactionReference (the join key for verify + webhooks) and
-        // the checkoutUrl the customer is redirected to.
+        $transactionReference = (string) ($init['transactionReference'] ?? $request->transactionReference);
+        $account = $this->client->initBankTransferPayment($transactionReference);
+
         return new PaymentChargeResponse(
             ProviderOutcome::Ambiguous,
-            (string) ($result['transactionReference'] ?? $request->transactionReference),
+            $transactionReference,
             'Awaiting payment',
             [
-                'payment_url' => (string) ($result['checkoutUrl'] ?? ''),
-                'account_number' => (string) ($result['accountNumber'] ?? ''),
-                'bank' => (string) ($result['bankName'] ?? 'Monnify partner bank'),
-                'bank_code' => (string) ($result['bankCode'] ?? ''),
+                'payment_url' => (string) ($init['checkoutUrl'] ?? ''),
+                'account_number' => (string) ($account['accountNumber'] ?? ''),
+                'account_name' => (string) ($account['accountName'] ?? ''),
+                'bank' => (string) ($account['bankName'] ?? 'Monnify partner bank'),
+                'bank_code' => (string) ($account['bankCode'] ?? ''),
+                'account_duration_seconds' => (int) ($account['accountDurationSeconds'] ?? 0),
+                'expires_at' => (string) ($account['expiresOn'] ?? ''),
                 'amount' => $request->amount,
             ],
         );
