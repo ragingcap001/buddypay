@@ -499,23 +499,30 @@ Honest state of the branch, so nobody assumes more than is true.
   Routes resolve and the code parses, but no page has been loaded, no form
   saved, and no login performed.
 - **Provider integrations were cross-checked against the public docs on
-  2026-08-27 — bugs found, NOT yet fixed in code (still open below).**
-  Kuda is otherwise aligned (auth, envelope, short refs, TSQ-first
-  settlement, webhook headers); the one open bug is airtime
-  auto-resolution rejecting valid dashed identifiers such as
-  `KD-VTU-MTNNG` (`KudaBillProvider`'s guard excludes anything containing
-  a `-`, when only UUID-shaped values should be excluded). Monnify has
-  three open contract bugs in `MonnifyClient`/`MonnifyPaymentProvider`:
-  auth posts to `/api/v2/oauth/token` reading `access_token`/`expires_in`
-  (docs: `POST /api/v1/auth/login` with Basic `base64(apiKey:secretKey)`
-  returning `accessToken`/`expiresIn`); the funding-init payload sends
-  `reference`/`currency` and reads back `paymentUrl` (docs: `paymentReference`
-  /`currencyCode` in, `checkoutUrl` out); verification reads `status`
-  (docs: `paymentStatus`) — this last one is the dangerous one: a paid
-  funding stays `AMBIGUOUS` forever rather than erroring loudly. The
-  codebase's own webhook normalizer already uses the correct
-  `paymentReference`/`paymentStatus` vocabulary, so this isn't a doc
-  dispute — the client body drifted from its own documented contract.
+  2026-08-27 (two passes) and 2026-08-28 (Monnify funding, see Phase 3
+  below).** Kuda is aligned (auth, envelope, short refs, TSQ-first
+  settlement, webhook headers; a second pass then verified the
+  bill-operation request/response shapes — all Kuda request fields matched
+  the docs exactly, but four response-parsing gaps were found and fixed:
+  the documented `Data.Billers[].BillItems[]` catalog nesting was never
+  unwrapped so airtime auto-resolution could not find item identifiers,
+  `Data.CustomerName` was lost on validation, a boolean `Status: false`
+  verification was misread as valid, and `Data.Reference` from the purchase
+  receipt was never captured as `provider_reference`; the client now parses
+  the documented envelope and flat shapes leniently). Airtime
+  auto-resolution also no longer rejects valid dashed identifiers such as
+  `KD-VTU-MTNNG` (only UUID-shaped values are excluded; network detection
+  itself now lives in the shared `NetworkDetector`, used by both this
+  provider and `GET /v1/detect-network`). Monnify had four contract bugs
+  in the collection/checkout path, all fixed: auth was `POST
+  /api/v1/auth/login` with Basic `base64(apiKey:secretKey)` (not
+  `/api/v2/oauth/token`), checkout is `POST /api/v1/merchant/transactions/
+  init-transaction` with `paymentReference`/`currencyCode` returning
+  `checkoutUrl`, verify is `GET /api/v2/merchant/transactions/query`
+  reading `paymentStatus`, and name enquiry is `GET /api/v2/disbursements/
+  account/validate?accountNumber=…&bankCode=…` (not `/api/v2/transfer/
+  name-enquiry/{bank}/{account}`). A fifth Monnify bug, in the funding
+  flow specifically, was found and fixed on 2026-08-28: see Phase 3 below.
   **Wema needs confirmation of the subscribed product** (see the warning in
   `docs/PROVIDERS.md`): the code targets the subscription-key ALAT API,
   while the portal also documents an AES-encrypted NIP Merchant-Payout
@@ -600,15 +607,22 @@ Honest state of the branch, so nobody assumes more than is true.
       must re-initiate.
 - [ ] **Wema webhook payload shape is assumed**, not confirmed against a
       real sandbox callback. Verify when test credentials exist.
-- [ ] **Monnify name-enquiry path is unverified** against the live API
-      (client method only, unused in current flows).
-- [ ] **Kuda request/response shapes are unverified** against the official
-      docs (see Current status).
-- [ ] `$transaction->metadata + $response->providerMetadata` in
-      `BillPaymentService` would fatal if `metadata` were ever `null` (the
-      column is nullable and Laravel's array cast passes null through). Not
-      reachable today — metadata is always set at creation — but it is a
-      latent trap if that ever changes.
+- [x] **Monnify name-enquiry path** — verified against the current docs
+  (2026-08-27) and corrected: it is the free "Validate Bank Account" API,
+  `GET /api/v2/disbursements/account/validate?accountNumber=…&bankCode=…`.
+  (Client method only, unused in current flows.)
+- [x] **Kuda request/response shapes** — cross-checked against Kuda's
+  public API reference (2026-08-27): request fields matched exactly; four
+  response-parsing gaps found and fixed (documented `Data.*` nesting for
+  the catalog, validation name, boolean `Status: false`, and purchase
+  `Data.Reference`). See `docs/PROVIDERS.md` and Current status. The
+  Business API v2.1 portal docs are not public — UAT traffic remains the
+  final confirmation.
+- [x] `$transaction->metadata + $response->providerMetadata` in
+  `BillPaymentService` would fatal if `metadata` were ever `null` (the
+  column is nullable and Laravel's array cast passes null through) —
+  guarded with `?? []` in both `BillPaymentService` and `FundingService`
+  (2026-08-27).
 
 ### Hardening before public exposure
 

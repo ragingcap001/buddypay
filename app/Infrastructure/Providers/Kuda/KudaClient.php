@@ -184,13 +184,37 @@ final class KudaClient
      * `kudaIdentifier`) for one category: airtime, "internet data",
      * betting, electricity, cabletv, ...
      *
-     * @return array<int|string, mixed>
+     * The documented response is
+     * `{ Status, Message, Data: { Billers: [ { Id, Name, Description,
+     * BillTypeId, BillItems: [...] } ] } }`; this method normalizes that to
+     * the list of billers (a flat biller list is passed through).
+     *
+     * @return array<int|string, mixed>  list of billers
      */
     public function getBillersByType(string $billTypeName): array
     {
         $payload = $this->request('GET_BILLERS_BY_TYPE', ['BillTypeName' => $billTypeName]);
 
-        return $this->findValue($payload, ['billers', 'Billers', 'data', 'Data', 'result', 'Result']) ?? $payload;
+        return self::extractBillers($payload);
+    }
+
+    /**
+     * Unwrap a GET_BILLERS_BY_TYPE response to the list of billers.
+     * Handles the documented `Data.Billers` nesting, a top-level `Billers`
+     * key, or a flat list of billers.
+     *
+     * @param  array<string, mixed>  $payload
+     * @return array<int|string, mixed>
+     */
+    public static function extractBillers(array $payload): array
+    {
+        $unwrapped = self::findValue($payload, ['data', 'Data', 'result', 'Result']);
+
+        $source = is_array($unwrapped) ? $unwrapped : $payload;
+
+        $billers = self::findValue($source, ['billers', 'Billers']);
+
+        return is_array($billers) ? $billers : $source;
     }
 
     /**

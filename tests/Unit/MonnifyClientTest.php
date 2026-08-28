@@ -132,6 +132,35 @@ final class MonnifyClientTest extends TestCase
         app(MonnifyClient::class)->singleTransfer(250000, 'ASE_T_1', '232', '0123456789', 'JOHN DOE');
     }
 
+    public function test_name_enquiry_uses_the_validate_bank_account_endpoint(): void
+    {
+        $this->fakeTokenAnd('sandbox.monnify.com/*', Http::response([
+            'requestSuccessful' => true,
+            'responseCode' => '0',
+            'responseBody' => [
+                'accountNumber' => '0123456789',
+                'accountName' => 'JOHN DOE',
+                'bankCode' => '058',
+                'bankName' => 'GTBank',
+            ],
+        ]));
+
+        $result = app(MonnifyClient::class)->nameEnquiry('058', '0123456789');
+
+        $this->assertSame('JOHN DOE', $result['accountName']);
+
+        // Current docs: GET /api/v2/disbursements/account/validate
+        // ?accountNumber=...&bankCode=... (the "Name Enquiry" service).
+        Http::assertSent(function ($request) {
+            $url = $request->url();
+
+            return str_contains($url, '/api/v2/disbursements/account/validate')
+                && str_contains($url, 'accountNumber=0123456789')
+                && str_contains($url, 'bankCode=058')
+                && $request->hasHeader('Authorization', 'Bearer test-token');
+        });
+    }
+
     public function test_missing_credentials_fail_before_any_request(): void
     {
         config(['ase.monnify.api_key' => '']);
