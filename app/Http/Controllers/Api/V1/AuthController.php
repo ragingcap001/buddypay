@@ -165,7 +165,16 @@ class AuthController extends Controller
      */
     public function resendEmailOtp(ResendEmailOtpRequest $request): JsonResponse
     {
-        $user = User::where('email', $request->input('email'))->firstOrFail();
+        // ResendEmailOtpRequest already validates exists:users,email, so
+        // this should never miss in practice — first() rather than
+        // firstOrFail() anyway, so a race (however unlikely) renders this
+        // endpoint's own {message} shape instead of Laravel's default
+        // off-envelope 404.
+        $user = User::where('email', $request->input('email'))->first();
+
+        if ($user === null) {
+            return response()->json(['message' => 'The selected email is invalid.'], 422);
+        }
 
         if ($user->email_verified_at !== null) {
             return response()->json(['message' => 'Email already verified.'], 400);

@@ -48,8 +48,29 @@ final class MonnifyPaymentProvider implements PaymentProviderInterface
             'Wallet funding',
         );
 
+        // Monnify's transactionReference from step 1 exists the moment
+        // this call succeeds — capture it before step 2 runs. If step 2
+        // then throws (timeout mid-call, 5xx), letting the exception
+        // propagate to ProviderGateway's generic catch would return
+        // providerReference: null, and the transaction becomes
+        // permanently unverifiable (verifyReference() has nothing to ask
+        // Monnify about). Catching it here instead means the transaction
+        // parks in VERIFYING WITH a reference, recoverable via
+        // GET /api/v2/merchant/transactions/query — Monnify's own record
+        // of the transaction exists regardless of whether step 2 ever
+        // completed.
         $transactionReference = (string) ($init['transactionReference'] ?? $request->transactionReference);
-        $account = $this->client->initBankTransferPayment($transactionReference);
+
+        try {
+            $account = $this->client->initBankTransferPayment($transactionReference);
+        } catch (\Throwable $e) {
+            return new PaymentChargeResponse(
+                ProviderOutcome::Ambiguous,
+                $transactionReference,
+                'Transaction opened but the dynamic account could not be generated: '.$e->getMessage(),
+                ['payment_url' => (string) ($init['checkoutUrl'] ?? ''), 'amount' => $request->amount],
+            );
+        }
 
         return new PaymentChargeResponse(
             ProviderOutcome::Ambiguous,

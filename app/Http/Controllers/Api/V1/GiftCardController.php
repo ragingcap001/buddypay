@@ -137,6 +137,10 @@ class GiftCardController extends Controller
                 'brand' => $product['brand'],
                 'denomination' => $denomination,
                 'recipient_currency' => $product['recipient_currency_code'],
+                // What we expected to pay Reloadly, before our own markup —
+                // compared against their actual reported charge once the
+                // order settles (see GiftCardPurchaseService::applyOutcome()).
+                'expected_base_ngn_kobo' => $price['baseNgnKobo'],
             ],
         );
 

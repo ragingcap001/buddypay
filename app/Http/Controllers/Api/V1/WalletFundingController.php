@@ -133,11 +133,44 @@ class WalletFundingController extends Controller
     /**
      * POST /v1/wallet/monnify/fund/{id}/retry — expires the current
      * attempt and generates fresh bank details for the same amount.
+     *
+     * The old one-time Monnify account is NOT cancelled (Monnify's "Pay
+     * With Bank Transfer" one-time accounts have no documented
+     * cancellation endpoint — only Reserved Accounts, a different
+     * product, can be deleted). If the customer transfers to the old
+     * account after this call marks it FAILED, that payment becomes
+     * unreachable through the normal webhook path (a terminal
+     * transaction is a no-op there by design — see
+     * WebhookController::processEvent()). Checking for a just-landed
+     * payment here, before superseding, closes most of that window; it
+     * cannot close all of it — a transfer arriving in the gap between
+     * this check and the new account being generated is still a real,
+     * if narrow, residual race. WebhookController flags that residual
+     * case loudly instead of silently dropping it, but does not
+     * auto-credit it — recovering funds for a transaction the state
+     * machine already marked FAILED is a product decision, not one this
+     * fix makes unilaterally.
      */
     public function retry(Request $request, int $id): JsonResponse
     {
         $current = $this->findFunding($request, $id);
         $user = $this->authUser($request);
+
+        // Only Ambiguous/Verifying are accepted by verifyReference() —
+        // Initiated/Pending/Processing are momentary states execute()
+        // never actually returns with, but guard against them literally
+        // rather than assume.
+        if (in_array($current->status, [TransactionStatus::Ambiguous->value, TransactionStatus::Verifying->value], true)) {
+            $current = $this->funding->verifyReference($current);
+        }
+
+        if (TransactionStatus::from($current->status) === TransactionStatus::Completed) {
+            return response()->json([
+                'status' => 'success',
+                'message' => 'This payment was already processed.',
+                'data' => $this->shapeFunding($current),
+            ]);
+        }
 
         if (in_array($current->status, self::OPEN_STATUSES, true)) {
             \Illuminate\Support\Facades\DB::transaction(

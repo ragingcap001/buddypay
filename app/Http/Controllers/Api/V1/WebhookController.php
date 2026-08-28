@@ -183,8 +183,39 @@ class WebhookController extends Controller
             return; // No internal record — nothing to do (reconciliation will flag it).
         }
 
-        if (TransactionStatus::from($txn->status)->isTerminal()) {
+        $status = TransactionStatus::from($txn->status);
+
+        if ($status === TransactionStatus::Completed || $status === TransactionStatus::Reversed) {
             return; // Already settled — idempotent no-op.
+        }
+
+        if ($status === TransactionStatus::Failed) {
+            // A FAILED transaction has no outgoing state-machine transition
+            // (by design — see TransactionStateMachine), so a genuine
+            // success arriving now cannot be applied to it, only reported.
+            // This is not always benign: wallet-funding retry() marks the
+            // superseded attempt FAILED without cancelling the one-time
+            // Monnify account behind it (no cancellation endpoint exists
+            // for that product), so a customer who transfers to the old
+            // account after a retry lands exactly here — money Monnify has
+            // that this transaction can no longer credit. Silently
+            // no-op'ing that is how it stays invisible until someone
+            // notices manually; log it critically instead so it surfaces.
+            if (in_array($event->eventType, ['payment.success', 'payout.success', 'bill.transaction'], true)) {
+                \Illuminate\Support\Facades\Log::critical(
+                    'Webhook reports success for an already-FAILED transaction — funds may be unrecovered, needs manual reconciliation',
+                    [
+                        'provider' => $providerName,
+                        'reference' => $txn->reference,
+                        'type' => $txn->type,
+                        'event_type' => $event->eventType,
+                        'event_id' => $event->eventId,
+                        'amount_kobo' => $event->amountKobo,
+                    ],
+                );
+            }
+
+            return; // Still a no-op — see the log above for why this can't safely self-heal here.
         }
 
         // Amount guard (per Monnify's integration guidance): never settle on

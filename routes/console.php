@@ -25,3 +25,6 @@ Schedule::command('transactions:verify-stale')->everyMinute();
 
 // Nightly reconciliation against the mock provider (add real providers here).
 Schedule::command('reconciliation:run mock --days=1')->dailyAt('02:00');
+
+// Delete idempotency keys past their expiry — previously nothing did this.
+Schedule::command('idempotency:sweep')->hourly();

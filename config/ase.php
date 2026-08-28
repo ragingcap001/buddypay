@@ -32,8 +32,15 @@ return [
     ],
 
     'idempotency' => [
-        // Idempotency keys are retained for this long before cleanup.
+        // A COMPLETED key's stored response is replayed for this long.
         'ttl_days' => 30,
+        // An IN_PROGRESS key older than this is presumed abandoned (worker
+        // crash, unhandled exception between begin() and complete()) rather
+        // than genuinely still in flight — every provider call in this
+        // codebase times out well under a minute, so this is a wide safety
+        // margin, not a guess at typical latency. Once past it, begin()
+        // allows a fresh attempt instead of returning 409 forever.
+        'stuck_in_progress_minutes' => 5,
     ],
 
     'circuit_breaker' => [

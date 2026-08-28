@@ -347,7 +347,7 @@ final class KudaBillProvider implements BillProviderInterface
 
         $normalizedNetwork = (string) preg_replace('/\s+/', '', $network);
 
-        $billers = array_values(array_filter($billers, is_array));
+        $billers = array_values(array_filter($billers, 'is_array'));
 
         foreach ($billers as $biller) {
             $billerName = (string) (KudaClient::firstString($biller, ['Name', 'name', 'billerName', 'BillerName', 'Description', 'description']) ?? '');
@@ -356,7 +356,7 @@ final class KudaBillProvider implements BillProviderInterface
             $items = KudaClient::findValue($biller, ['billItems', 'BillItems', 'items', 'Items']);
 
             $candidates = (is_array($items) && $items !== [])
-                ? array_values(array_filter($items, is_array))
+                ? array_values(array_filter($items, 'is_array'))
                 : [$biller];
 
             foreach ($candidates as $candidate) {

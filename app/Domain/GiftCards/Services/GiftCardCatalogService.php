@@ -110,8 +110,11 @@ final class GiftCardCatalogService
      * The kobo price to actually charge for a specific denomination —
      * used at purchase time, not just for display. Returns null if the
      * product or denomination can't be resolved (caller must decline).
+     * `baseNgnKobo` (pre-markup) is returned alongside `totalKobo` so the
+     * caller can reconcile it against what Reloadly actually reports
+     * charging once the order settles.
      *
-     * @return array{unitPrice: float, totalKobo: int}|null
+     * @return array{unitPrice: float, totalKobo: int, baseNgnKobo: int}|null
      */
     public function priceForPurchase(int $productId, float $denomination): ?array
     {
@@ -138,11 +141,17 @@ final class GiftCardCatalogService
             }
         }
 
-        $baseNgn = $this->resolveBaseNgnPrice($product, $denomination);
-        $bpsRate = (int) config('ase.fees.giftcard.bps', 0) / 10000;
-        $total = $baseNgn + ($baseNgn * $bpsRate) + ((int) config('ase.fees.giftcard.flat', 0) / 100);
+        // Reloadly hands back a float NGN amount — converted to integer
+        // kobo immediately, once, at this external boundary. Every
+        // calculation after this line is integer math (matching
+        // TransactionService::calculateFee()'s bps pattern), not floats
+        // compounding on floats.
+        $baseNgnKobo = (int) round($this->resolveBaseNgnPrice($product, $denomination) * 100);
+        $bps = (int) config('ase.fees.giftcard.bps', 0);
+        $flatKobo = (int) config('ase.fees.giftcard.flat', 0);
+        $serviceFeeKobo = intdiv($baseNgnKobo * $bps, 10000) + $flatKobo;
 
-        return ['unitPrice' => $denomination, 'totalKobo' => (int) round($total * 100)];
+        return ['unitPrice' => $denomination, 'totalKobo' => $baseNgnKobo + $serviceFeeKobo, 'baseNgnKobo' => $baseNgnKobo];
     }
 
     /**
@@ -174,8 +183,12 @@ final class GiftCardCatalogService
     }
 
     /**
+     * RANGE products return a {min, max} breakdown; FIXED products return
+     * a list, one breakdown per denomination — genuinely different
+     * shapes, not an imprecise annotation of one shape.
+     *
      * @param  array<string, mixed>  $product
-     * @return array<string, mixed>
+     * @return array<string, mixed>|list<array<string, mixed>>
      */
     private function pricing(array $product): array
     {
