@@ -17,8 +17,8 @@ class SetPinRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'password' => ['required', 'string'],
-            'pin' => ['required', 'string', 'regex:/^\d{4}$/'],
+            'transactionPin' => ['required', 'string', 'regex:/^\d{4}$/'],
+            'transactionPinConfirm' => ['required', 'string', 'same:transactionPin'],
         ];
     }
 }

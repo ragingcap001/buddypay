@@ -167,21 +167,22 @@ needs while the framework pin is unresolved.
 ## Trying the API end to end (mock providers)
 
 ```bash
-# 1. Register (the response contains data.dev_otp in local/testing envs)
-curl -s -X POST http://localhost:8080/api/v1/auth/register \
+# 1. Register (the response contains dev_otp in local/testing envs)
+curl -s -X POST http://localhost:8080/api/v1/register \
   -H 'Content-Type: application/json' -H 'Accept: application/json' \
-  -d '{"name":"Chidi Okafor","phone":"08031234567","password":"secret123","password_confirmation":"secret123"}'
+  -d '{"firstName":"Chidi","lastName":"Okafor","email":"chidi@example.com","phone":"08031234567","gender":"male","password":"secret123","passwordConfirmation":"secret123"}'
 
-# 2. Verify the OTP (use the dev_otp value from step 1)
-curl -s -X POST http://localhost:8080/api/v1/auth/verify-otp \
+# 2. Verify the email OTP (use the dev_otp value from step 1)
+curl -s -X POST http://localhost:8080/api/v1/verify-email \
   -H 'Content-Type: application/json' -H 'Accept: application/json' \
-  -d '{"phone":"08031234567","otp":"<dev_otp>"}'
-# -> returns data.token (Bearer token)
+  -d '{"email":"chidi@example.com","otp":"<dev_otp>"}'
+# -> returns token (Bearer token)
 
-# 3. Set a transaction PIN (sensitive operations require it)
-curl -s -X POST http://localhost:8080/api/v1/auth/pin \
+# 3. Set a transaction PIN (sensitive operations require it) — first time
+# only; an existing PIN must go through /v1/user/reset-pin instead.
+curl -s -X POST http://localhost:8080/api/v1/user/set-pin \
   -H "Authorization: Bearer <token>" -H 'Content-Type: application/json' -H 'Accept: application/json' \
-  -d '{"password":"secret123","pin":"1234"}'
+  -d '{"transactionPin":"1234","transactionPinConfirm":"1234"}'
 
 # 4. Fund the wallet (idempotent — send a unique Idempotency-Key per request)
 curl -s -X POST http://localhost:8080/api/v1/wallet/fund \
@@ -229,6 +230,84 @@ for **every** call, and classifies the outcome. Unknown or in-flight
 provider states resolve to **AMBIGUOUS** — the platform verifies rather
 than guessing, and never fails over an ambiguous transaction to a second
 provider.
+
+## Mobile API contract
+
+The customer-facing API is being aligned to a full contract handed down
+by the mobile team (`payloads.md`) — exact routes, field names/casing,
+and response shapes, since a real client is being built against it. This
+is a **presentation-layer rewrite**: `routes/api.php`, controllers,
+Form Requests and Resources change to match; the ledger, wallet
+reservations, state machine, idempotency and provider gateway underneath
+are untouched and are called from the new controllers exactly as before.
+
+Delivered in phases, each reviewed before the next starts:
+
+**Phase 1 (done)** — session lifecycle, self-service account, notifications:
+- Auth is now **email**-first, not phone: `POST /v1/register` (issues an
+  email OTP, no token yet) → `POST /v1/verify-email` (issues the token) →
+  `POST /v1/login` (email + password). `POST /v1/resend-email-otp`,
+  `/v1/forgot-password` → `/v1/verify-reset-otp` → `/v1/reset-password`
+  replace the old random-token reset link — password reset now reuses the
+  same `OtpChallenge` mechanism as email verification (the
+  `password_reset_tokens` table is dropped, not just unused).
+- `users.fpuid` (`FP` + zero-padded id, assigned in a model `created`
+  hook — no separate counter table, so no race to guard against),
+  `first_name`/`last_name` (`name` stays, kept in sync via a `saving`
+  hook — Filament tables and existing services still read it),
+  `gender`, `device_token`.
+- `/v1/user/profile` (GET/PUT), `/v1/user/change-password`,
+  `/v1/user/update-device-token` — new; didn't exist before.
+- PIN: `set-pin`/`verify-pin` already existed (as `/v1/auth/pin` and
+  `/v1/auth/verify-pin`) and just moved under `/v1/user/*` with the
+  contract's field names. `reset-pin` (old PIN → new PIN) is new.
+  **`set-pin` now refuses to run if a PIN is already set** (409, directing
+  to `reset-pin`) — the contract doesn't specify this, but letting a bearer
+  token alone silently overwrite an existing PIN would be a real
+  hole; changing one now requires proving you know the current one.
+- `/v1/preferences` (public, no auth) — feature flags + socials, in a new
+  `platform_preferences` table with a Filament page to edit them.
+  Deliberately **not** part of `AppConfigService`: that service is for
+  encrypted, masked infra/provider secrets; this is public, non-secret
+  product config, different audience and blast radius.
+  `bettingCharge` in the response is **not stored** — it's read live from
+  `config('ase.fees.betting.flat')`, the exact figure `FeeCalculation`
+  already charges, so the two numbers can't drift apart.
+- In-app notifications (`/v1/user/notifications`, `mark-all-read`,
+  `{id}/mark-read`) run on Laravel's native database-notification channel
+  (`App\Notifications\V1\*`), not a bespoke table — its pagination and
+  row shape already match the contract exactly. This is separate from
+  `NotificationService`'s SMS/push/log delivery pipeline, which still
+  runs unchanged alongside it; the database notification is written
+  "solely for the in-app section", per the contract, so it exists even
+  for a user who never opted into push.
+
+**Known gap left for Phase 2**: `RequirePin` (the middleware gating
+wallet/fund, wallet/payout, bills/pay) reads the PIN from an
+`X-Transaction-Pin` **header**; the contract's purchase payloads
+(airtime/data/electricity/betting/cable/giftcard) all send `"pin"` in the
+**JSON body**. This has to be reconciled when those routes are rebuilt —
+not touched yet since Phase 1 doesn't add any of those routes.
+
+**Phase 1 placeholders, not yet wired**: `GET /v1/user/profile`'s
+`transactions` and `walletFundings` arrays are hardcoded `[]`. The
+contract's transaction-list shape (`serviceName`, `beneficiary`,
+`oldBalance`/`newBalance`, per-type `details`) needs fields the
+`Transaction` model doesn't have yet, and wiring it up depends on the
+Phase 2 purchase flows that will populate them.
+
+**Phase 2 (pending)** — dedicated purchase routes for airtime, data,
+electricity, betting, cable, replacing the current generic
+`POST /v1/bills/pay`; the contract-shaped `/v1/user/transactions` list.
+
+**Phase 3 (pending)** — wallet funding rework: the contract's
+generate-account/pending-fund/requery/confirm-payment/retry/fundings flow
+is Monnify's **Reserved/Dedicated Virtual Account** product, distinct
+from the hosted-checkout flow `MonnifyClient` currently implements.
+Building against that product is blocked on confirming it's enabled on
+the Monnify account in use. Gift cards (Reloadly) — a new provider
+integration with no existing code to build on — are scoped for this
+phase too.
 
 ## Money, invariants & safety rules
 
@@ -299,15 +378,23 @@ Honest state of the branch, so nobody assumes more than is true.
   Routes resolve and the code parses, but no page has been loaded, no form
   saved, and no login performed.
 - **Provider integrations were cross-checked against the public docs on
-  2026-08-27.** Kuda is aligned (auth, envelope, short refs, TSQ-first
-  settlement, webhook headers) — one bug found and fixed: airtime
-  auto-resolution rejected valid dashed identifiers such as `KD-VTU-MTNNG`
-  (now only UUID-shaped values are excluded). Monnify had three contract
-  bugs, all fixed: auth was `POST /api/v1/auth/login` with Basic
-  `base64(apiKey:secretKey)` (not `/api/v2/oauth/token`), checkout is
-  `POST /api/v1/merchant/transactions/init-transaction` with
-  `paymentReference`/`currencyCode` returning `checkoutUrl`, and verify is
-  `GET /api/v2/merchant/transactions/query` reading `paymentStatus`.
+  2026-08-27 — bugs found, NOT yet fixed in code (still open below).**
+  Kuda is otherwise aligned (auth, envelope, short refs, TSQ-first
+  settlement, webhook headers); the one open bug is airtime
+  auto-resolution rejecting valid dashed identifiers such as
+  `KD-VTU-MTNNG` (`KudaBillProvider`'s guard excludes anything containing
+  a `-`, when only UUID-shaped values should be excluded). Monnify has
+  three open contract bugs in `MonnifyClient`/`MonnifyPaymentProvider`:
+  auth posts to `/api/v2/oauth/token` reading `access_token`/`expires_in`
+  (docs: `POST /api/v1/auth/login` with Basic `base64(apiKey:secretKey)`
+  returning `accessToken`/`expiresIn`); the funding-init payload sends
+  `reference`/`currency` and reads back `paymentUrl` (docs: `paymentReference`
+  /`currencyCode` in, `checkoutUrl` out); verification reads `status`
+  (docs: `paymentStatus`) — this last one is the dangerous one: a paid
+  funding stays `AMBIGUOUS` forever rather than erroring loudly. The
+  codebase's own webhook normalizer already uses the correct
+  `paymentReference`/`paymentStatus` vocabulary, so this isn't a doc
+  dispute — the client body drifted from its own documented contract.
   **Wema needs confirmation of the subscribed product** (see the warning in
   `docs/PROVIDERS.md`): the code targets the subscription-key ALAT API,
   while the portal also documents an AES-encrypted NIP Merchant-Payout

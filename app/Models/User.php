@@ -24,8 +24,12 @@ class User extends Authenticatable
      */
     protected $fillable = [
         'name',
+        'first_name',
+        'last_name',
         'phone',
         'email',
+        'gender',
+        'device_token',
         'password',
         'status',
         'role',
@@ -96,5 +100,30 @@ class User extends Authenticatable
     public function pushDevices(): HasMany
     {
         return $this->hasMany(PushDevice::class);
+    }
+
+    public function hasTransactionPin(): bool
+    {
+        return $this->pin_hash !== null;
+    }
+
+    /**
+     * fpuid and `name` are both derived — assigned here so every creation
+     * path (registration, factories, seeders, tinker) gets them for free
+     * instead of relying on each caller to remember.
+     */
+    protected static function booted(): void
+    {
+        static::saving(function (self $user): void {
+            if ($user->isDirty(['first_name', 'last_name'])) {
+                $user->name = trim("{$user->first_name} {$user->last_name}");
+            }
+        });
+
+        static::created(function (self $user): void {
+            if ($user->fpuid === null) {
+                $user->forceFill(['fpuid' => sprintf('FP%08d', $user->id)])->saveQuietly();
+            }
+        });
     }
 }

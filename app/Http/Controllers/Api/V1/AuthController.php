@@ -5,22 +5,20 @@ namespace App\Http\Controllers\Api\V1;
 use App\Domain\Audit\Services\AuditService;
 use App\Domain\Authentication\Services\DeviceService;
 use App\Domain\Authentication\Services\OtpService;
-use App\Domain\Authentication\Services\PinService;
 use App\Domain\KYC\Enums\KycStatus;
 use App\Domain\KYC\Enums\KycTier;
 use App\Domain\Users\Enums\UserStatus;
 use App\Domain\Wallet\Services\WalletService;
+use App\Exceptions\FinancialException;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Auth\ForgotPasswordRequest;
 use App\Http\Requests\Auth\LoginRequest;
 use App\Http\Requests\Auth\RegisterRequest;
+use App\Http\Requests\Auth\ResendEmailOtpRequest;
 use App\Http\Requests\Auth\ResetPasswordRequest;
-use App\Http\Requests\Auth\SetPinRequest;
-use App\Http\Requests\Auth\VerifyOtpRequest;
-use App\Http\Requests\Auth\VerifyPinRequest;
+use App\Http\Requests\Auth\VerifyEmailRequest;
+use App\Http\Requests\Auth\VerifyResetOtpRequest;
 use App\Http\Resources\UserResource;
-use App\Http\Resources\WalletResource;
-use App\Http\Support\ApiResponse;
 use App\Models\KycProfile;
 use App\Models\OtpChallenge;
 use App\Models\User;
@@ -28,13 +26,16 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Str;
 
+/**
+ * Session lifecycle: register -> verify-email -> login / logout, plus the
+ * OTP-based password reset. Self-service actions on an already-authenticated
+ * account (profile, PIN, device token, notifications) live in UserController.
+ */
 class AuthController extends Controller
 {
     public function __construct(
         private readonly OtpService $otp,
-        private readonly PinService $pins,
         private readonly DeviceService $devices,
         private readonly WalletService $wallets,
         private readonly AuditService $audit,
@@ -42,25 +43,19 @@ class AuthController extends Controller
     }
 
     /**
-     * POST /api/v1/auth/register
-     *
-     * Creates the user (with wallet + KYC profile) and issues a
-     * registration OTP. The account can only sign in after OTP
-     * verification.
+     * POST /v1/register
      */
     public function register(RegisterRequest $request): JsonResponse
     {
         $phone = $this->normalizePhone((string) $request->input('phone'));
 
-        if (User::where('phone', $phone)->exists()) {
-            return ApiResponse::error('USER_EXISTS', 'An account with this phone number already exists.', 409, $request);
-        }
-
-        $result = DB::transaction(function () use ($request, $phone): User {
+        $user = DB::transaction(function () use ($request, $phone): User {
             $user = User::create([
-                'name' => $request->input('name'),
-                'phone' => $phone,
+                'first_name' => $request->input('firstName'),
+                'last_name' => $request->input('lastName'),
                 'email' => $request->input('email'),
+                'phone' => $phone,
+                'gender' => $request->input('gender'),
                 'password' => $request->input('password'),
                 'status' => UserStatus::Active->value,
             ]);
@@ -76,77 +71,70 @@ class AuthController extends Controller
             return $user;
         });
 
-        $otpResult = $this->otp->issue($result, OtpChallenge::PURPOSE_REGISTER);
-        $this->audit->log('auth.register', $result, $result);
+        $otpResult = $this->otp->issue($user, OtpChallenge::PURPOSE_EMAIL_VERIFY);
+        $this->audit->log('auth.register', $user, $user);
 
-        $payload = [
-            'user' => UserResource::make($result),
-            'message' => 'Registration started. Verify your phone number with the one-time code.',
-        ];
+        $payload = ['message' => 'Registration successful. OTP sent to email.'];
 
         if (app()->environment('local', 'testing')) {
             // Development convenience only — never expose codes in production.
             $payload['dev_otp'] = $otpResult['code'];
         }
 
-        return ApiResponse::success($payload, 'Registration started', 201);
+        return response()->json($payload, 201);
     }
 
     /**
-     * POST /api/v1/auth/verify-otp
+     * POST /v1/verify-email
      */
-    public function verifyOtp(VerifyOtpRequest $request): JsonResponse
+    public function verifyEmail(VerifyEmailRequest $request): JsonResponse
     {
-        $phone = $this->normalizePhone((string) $request->input('phone'));
-
-        $user = User::where('phone', $phone)->first();
+        $user = User::where('email', $request->input('email'))->first();
 
         if ($user === null) {
-            return ApiResponse::error('USER_NOT_FOUND', 'No account found for this phone number.', 404, $request);
+            return response()->json(['message' => 'No account found for this email address.'], 404);
         }
 
-        $challenge = $this->otp->latestChallenge($user, OtpChallenge::PURPOSE_REGISTER);
+        $challenge = $this->otp->latestChallenge($user, OtpChallenge::PURPOSE_EMAIL_VERIFY);
 
         if ($challenge === null) {
-            return ApiResponse::error('NO_ACTIVE_CHALLENGE', 'No pending verification for this phone number. Register first.', 404, $request);
+            return response()->json(['message' => 'No pending verification for this email address. Register first.'], 404);
         }
 
         // Throws FinancialException (OTP_INVALID / OTP_EXPIRED / OTP_LOCKED) on failure.
         $this->otp->verify($challenge, (string) $request->input('otp'));
 
-        $user->update(['phone_verified_at' => now()]);
+        $user->update(['email_verified_at' => now()]);
         $this->devices->recordLogin($user, $request);
-        $this->audit->log('auth.phone_verified', $user, $user);
+        $this->audit->log('auth.email_verified', $user, $user);
 
         $token = $user->createToken('api')->plainTextToken;
 
-        return ApiResponse::success([
+        return response()->json([
+            'message' => 'Email verified successfully.',
             'user' => UserResource::make($user->refresh()),
-            'wallet' => new WalletResource($user->wallet),
             'token' => $token,
-        ], 'Phone verified. You are now signed in.');
+        ]);
     }
 
     /**
-     * POST /api/v1/auth/login
+     * POST /v1/login
      */
     public function login(LoginRequest $request): JsonResponse
     {
-        $phone = $this->normalizePhone((string) $request->input('phone'));
+        $user = User::where('email', $request->input('email'))->first();
 
-        $user = User::where('phone', $phone)->first();
-
-        // Do not reveal whether the phone or the password was wrong.
+        // Do not reveal whether the email or the password was wrong.
         if ($user === null || ! Hash::check((string) $request->input('password'), $user->password)) {
-            return ApiResponse::error('INVALID_CREDENTIALS', 'Invalid phone number or password.', 401, $request);
+            return response()->json(['message' => 'Invalid email or password.'], 401);
         }
 
         if (! $user->isActive()) {
-            return ApiResponse::error('USER_SUSPENDED', 'This account is suspended. Contact support.', 403, $request);
+            return response()->json(['message' => 'This account is suspended. Contact support.'], 403);
         }
 
-        if (! $user->isPhoneVerified()) {
-            return ApiResponse::error('UNVERIFIED_USER', 'Your phone number has not been verified yet.', 403, $request);
+        if ($user->email_verified_at === null) {
+            return response()->json(['message' => 'Your email address has not been verified yet.'], 403);
         }
 
         $this->devices->recordLogin($user, $request);
@@ -154,111 +142,110 @@ class AuthController extends Controller
 
         $token = $user->createToken('api')->plainTextToken;
 
-        return ApiResponse::success([
+        return response()->json([
+            'message' => 'Login successful.',
             'user' => UserResource::make($user),
-            'wallet' => new WalletResource($user->wallet),
             'token' => $token,
-        ], 'Signed in successfully.');
+        ]);
     }
 
     /**
-     * POST /api/v1/auth/logout
+     * POST /v1/logout
      */
     public function logout(Request $request): JsonResponse
     {
         $user = $request->user('sanctum');
         $user?->currentAccessToken()?->delete();
 
-        return ApiResponse::success(null, 'Signed out.');
+        return response()->json(['message' => 'Logged out successfully.']);
     }
 
     /**
-     * POST /api/v1/auth/forgot-password
+     * POST /v1/resend-email-otp
+     */
+    public function resendEmailOtp(ResendEmailOtpRequest $request): JsonResponse
+    {
+        $user = User::where('email', $request->input('email'))->firstOrFail();
+
+        if ($user->email_verified_at !== null) {
+            return response()->json(['message' => 'Email already verified.'], 400);
+        }
+
+        $otpResult = $this->otp->issue($user, OtpChallenge::PURPOSE_EMAIL_VERIFY);
+
+        $payload = ['message' => 'A new OTP has been sent to your email.'];
+
+        if (app()->environment('local', 'testing')) {
+            $payload['dev_otp'] = $otpResult['code'];
+        }
+
+        return response()->json($payload);
+    }
+
+    /**
+     * POST /v1/forgot-password
+     *
+     * Always the same response regardless of whether the email is
+     * registered, to avoid account enumeration.
      */
     public function forgotPassword(ForgotPasswordRequest $request): JsonResponse
     {
-        $phone = $this->normalizePhone((string) $request->input('phone'));
+        $user = User::where('email', $request->input('email'))->first();
 
-        $user = User::where('phone', $phone)->first();
+        $payload = ['status' => true, 'message' => 'OTP sent to your email for password reset.'];
 
-        // Always the same response to avoid account enumeration.
         if ($user !== null) {
-            $token = Str::random(64);
-
-            DB::table('password_reset_tokens')->insert([
-                'phone' => $phone,
-                'token' => $token,
-                'expires_at' => now()->addHour(),
-                'created_at' => now(),
-                'updated_at' => now(),
-            ]);
-
+            $otpResult = $this->otp->issue($user, OtpChallenge::PURPOSE_PASSWORD_RESET);
             $this->audit->log('auth.password_reset_requested', $user, $user);
 
-            $payload = ['message' => 'If this phone number is registered, a reset link has been sent.'];
-
             if (app()->environment('local', 'testing')) {
-                $payload['dev_reset_token'] = $token;
+                $payload['dev_otp'] = $otpResult['code'];
             }
-
-            return ApiResponse::success($payload);
         }
 
-        return ApiResponse::success(['message' => 'If this phone number is registered, a reset link has been sent.']);
+        return response()->json($payload);
     }
 
     /**
-     * POST /api/v1/auth/reset-password
+     * POST /v1/verify-reset-otp
+     *
+     * Only unlocks the "set a new password" screen — the code is checked
+     * again, and consumed, by reset-password itself.
+     */
+    public function verifyResetOtp(VerifyResetOtpRequest $request): JsonResponse
+    {
+        $user = User::where('email', $request->input('email'))->first();
+        $challenge = $user !== null ? $this->otp->latestChallenge($user, OtpChallenge::PURPOSE_PASSWORD_RESET) : null;
+
+        if ($user === null || $challenge === null || ! $this->otp->peek($challenge, (string) $request->input('otp'))) {
+            return response()->json(['status' => false, 'message' => 'Invalid or expired OTP.']);
+        }
+
+        return response()->json(['status' => true, 'message' => 'OTP is valid. You can now reset your password.']);
+    }
+
+    /**
+     * POST /v1/reset-password
      */
     public function resetPassword(ResetPasswordRequest $request): JsonResponse
     {
-        $row = DB::table('password_reset_tokens')
-            ->where('token', $request->input('token'))
-            ->where('expires_at', '>', now())
-            ->first();
+        $user = User::where('email', $request->input('email'))->first();
+        $challenge = $user !== null ? $this->otp->latestChallenge($user, OtpChallenge::PURPOSE_PASSWORD_RESET) : null;
 
-        if ($row === null) {
-            return ApiResponse::error('RESET_TOKEN_INVALID', 'This reset token is invalid or has expired.', 422, $request);
+        if ($user === null || $challenge === null) {
+            return response()->json(['status' => false, 'message' => 'Invalid or expired OTP.'], 422);
         }
 
-        $user = User::where('phone', $row->phone)->first();
-
-        if ($user !== null) {
-            $user->update(['password' => $request->input('password')]);
-            $this->audit->log('auth.password_reset', $user, $user);
+        try {
+            $this->otp->verify($challenge, (string) $request->input('otp'));
+        } catch (FinancialException) {
+            return response()->json(['status' => false, 'message' => 'Invalid or expired OTP.'], 422);
         }
 
-        DB::table('password_reset_tokens')->where('token', $request->input('token'))->delete();
+        $user->update(['password' => $request->input('password')]);
+        $this->audit->log('auth.password_reset', $user, $user);
 
-        return ApiResponse::success(null, 'Password updated.');
-    }
-
-    /**
-     * POST /api/v1/auth/pin — set/change the transaction PIN.
-     */
-    public function setPin(SetPinRequest $request): JsonResponse
-    {
-        $user = $request->user('sanctum');
-
-        if (! Hash::check((string) $request->input('password'), $user->password)) {
-            return ApiResponse::error('INVALID_CREDENTIALS', 'Password is incorrect.', 401, $request);
-        }
-
-        $this->pins->setPin($user, (string) $request->input('pin'));
-
-        return ApiResponse::success(null, 'Transaction PIN set.');
-    }
-
-    /**
-     * POST /api/v1/auth/verify-pin
-     */
-    public function verifyPin(VerifyPinRequest $request): JsonResponse
-    {
-        $user = $request->user('sanctum');
-
-        $valid = $this->pins->hasPin($user) && $this->pins->verify($user, (string) $request->input('pin'));
-
-        return ApiResponse::success(['valid' => $valid]);
+        return response()->json(['status' => true, 'message' => 'Password reset successful.']);
     }
 
     private function normalizePhone(string $phone): string

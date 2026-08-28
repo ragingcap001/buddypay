@@ -132,6 +132,19 @@ class AppServiceProvider extends ServiceProvider
                 $titles[$type],
                 "Your {$transaction->type} transaction {$reference} is {$statusText}.",
             );
+
+            // Database-channel record for the mobile "in-app notifications"
+            // list — kept separate from the SMS/push delivery above, since
+            // it must exist even for a user who never opted into push.
+            $user = $transaction->user;
+
+            if ($user !== null) {
+                $user->notify(match ($type) {
+                    'transaction.completed' => new \App\Notifications\V1\TransactionSuccessNotification($transaction),
+                    'transaction.failed' => new \App\Notifications\V1\TransactionFailedNotification($transaction),
+                    default => new \App\Notifications\V1\TransactionVerifyingNotification($transaction),
+                });
+            }
         });
     }
 }

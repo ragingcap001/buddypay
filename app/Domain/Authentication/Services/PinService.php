@@ -36,9 +36,4 @@ final class PinService
 
         return Hash::check($pin, $user->pin_hash);
     }
-
-    public function hasPin(User $user): bool
-    {
-        return $user->pin_hash !== null;
-    }
 }

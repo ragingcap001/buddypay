@@ -7,7 +7,10 @@ use App\Http\Controllers\Api\V1\BillController;
 use App\Http\Controllers\Api\V1\HealthController;
 use App\Http\Controllers\Api\V1\KycController;
 use App\Http\Controllers\Api\V1\NotificationDeviceController;
+use App\Http\Controllers\Api\V1\PreferenceController;
 use App\Http\Controllers\Api\V1\TransactionController;
+use App\Http\Controllers\Api\V1\UserController;
+use App\Http\Controllers\Api\V1\UserNotificationController;
 use App\Http\Controllers\Api\V1\WalletController;
 use App\Http\Controllers\Api\V1\WebhookController;
 use Illuminate\Support\Facades\Route;
@@ -16,23 +19,41 @@ Route::prefix('v1')->group(function (): void {
     // Health
     Route::get('/health', [HealthController::class, 'show']);
 
-    // Authentication
-    Route::prefix('auth')->group(function (): void {
-        Route::post('/register', [AuthController::class, 'register'])->middleware('throttle:auth');
-        Route::post('/verify-otp', [AuthController::class, 'verifyOtp'])->middleware('throttle:auth');
-        Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:auth');
-        Route::post('/forgot-password', [AuthController::class, 'forgotPassword'])->middleware('throttle:auth');
-        Route::post('/reset-password', [AuthController::class, 'resetPassword'])->middleware('throttle:auth');
+    // Public — feature flags / socials, needed before a user is signed in.
+    Route::get('/preferences', [PreferenceController::class, 'show']);
 
-        Route::middleware('auth:sanctum')->group(function (): void {
-            Route::post('/logout', [AuthController::class, 'logout']);
-            Route::post('/pin', [AuthController::class, 'setPin'])->middleware('throttle:auth');
-            Route::post('/verify-pin', [AuthController::class, 'verifyPin'])->middleware('throttle:auth');
-        });
+    // Authentication (session lifecycle)
+    Route::post('/register', [AuthController::class, 'register'])->middleware('throttle:auth');
+    Route::post('/verify-email', [AuthController::class, 'verifyEmail'])->middleware('throttle:auth');
+    Route::post('/resend-email-otp', [AuthController::class, 'resendEmailOtp'])->middleware('throttle:auth');
+    Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:auth');
+    Route::post('/forgot-password', [AuthController::class, 'forgotPassword'])->middleware('throttle:auth');
+    Route::post('/verify-reset-otp', [AuthController::class, 'verifyResetOtp'])->middleware('throttle:auth');
+    Route::post('/reset-password', [AuthController::class, 'resetPassword'])->middleware('throttle:auth');
+
+    Route::middleware('auth:sanctum')->group(function (): void {
+        Route::post('/logout', [AuthController::class, 'logout']);
     });
 
     // Authenticated user endpoints
     Route::middleware(['auth:sanctum', 'active'])->group(function (): void {
+        Route::prefix('user')->group(function (): void {
+            Route::get('/profile', [UserController::class, 'show']);
+            Route::put('/profile', [UserController::class, 'update']);
+            Route::put('/change-password', [UserController::class, 'changePassword'])->middleware('throttle:auth');
+            Route::post('/update-device-token', [UserController::class, 'updateDeviceToken']);
+            Route::post('/set-pin', [UserController::class, 'setPin'])->middleware('throttle:auth');
+            Route::post('/verify-pin', [UserController::class, 'verifyPin'])->middleware('throttle:auth');
+            Route::post('/reset-pin', [UserController::class, 'resetPin'])->middleware('throttle:auth');
+
+            Route::prefix('notifications')->group(function (): void {
+                Route::get('/', [UserNotificationController::class, 'index']);
+                Route::post('/mark-all-read', [UserNotificationController::class, 'markAllRead']);
+                Route::post('/{id}/mark-read', [UserNotificationController::class, 'markRead'])
+                    ->where('id', '[0-9a-fA-F-]{36}');
+            });
+        });
+
         Route::prefix('wallet')->group(function (): void {
             Route::get('/', [WalletController::class, 'summary']);
             Route::get('/balance', [WalletController::class, 'balance']);
