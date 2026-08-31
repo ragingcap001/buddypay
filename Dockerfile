@@ -28,13 +28,12 @@ COPY --from=composer /usr/bin/composer /usr/bin/composer
 
 WORKDIR /var/www/html
 
-# Install dependencies. composer.lock is not committed yet, so deps are
-# resolved at build time; once composer.lock is committed, switch to
-# `COPY composer.json composer.lock ./` and plain `composer install` for
-# reproducible builds. --no-scripts: no artisan should run during the
-# image build (Laravel auto-generates the package manifest on first boot).
-COPY composer.json ./
-RUN composer update --no-interaction --prefer-dist --no-progress --no-scripts
+# Install dependencies from the committed lock file, not a fresh
+# resolve, so every build gets exactly what was tested. --no-scripts: no
+# artisan should run during the image build (Laravel auto-generates the
+# package manifest on first boot).
+COPY composer.json composer.lock ./
+RUN composer install --no-interaction --prefer-dist --no-progress --no-scripts --no-dev
 
 COPY . .
 

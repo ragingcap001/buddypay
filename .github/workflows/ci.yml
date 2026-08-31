@@ -1,0 +1,119 @@
+# ---------------------------------------------------------------------------
+# Aṣẹ API — CI
+# ---------------------------------------------------------------------------
+#
+# Re-enabled after the Laravel 12 upgrade (framework now on v12.68.0, past
+# the 12.60 floor where CVE-2026-48019 and friends are fixed). The
+# `--no-security-blocking` escape hatch that used to be required to install
+# dependencies at all is gone, and `composer audit` is now a real (fatal)
+# gate instead of advisory-only, since there's no longer a known-unresolved
+# advisory to tolerate.
+#
+# The Pint step stays non-fatal on purpose — it currently fails
+# project-wide on pre-existing formatting debt unrelated to this upgrade
+# (see DEVELOPMENT.md). Make it fatal once the codebase has had a single
+# `./vendor/bin/pint` sweep.
+#
+# The test suite is expected to go red on this first run: 101 of 170 tests
+# fail today, confirmed pre-existing and unrelated to the Laravel 12 bump
+# (identical failure count reproduced against the prior Laravel 11 lock).
+# That's a known, tracked gap (see review item on test coverage), not
+# something this workflow introduces.
+#
+# Service versions and credentials mirror docker-compose.yml and the
+# `<php>` env block in phpunit.xml — keep them in sync.
+# ---------------------------------------------------------------------------
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests & static analysis
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: buddypay
+          POSTGRES_PASSWORD: buddypay
+          POSTGRES_DB: buddypay
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U buddypay -d buddypay"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # 8.3 matches the Dockerfile and composer.json's config.platform.php.
+      - name: Set up PHP 8.3
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: pdo_pgsql, bcmath, zip, intl, pcntl, redis
+          coverage: none
+
+      - name: Cache Composer packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/composer/files
+          key: composer-${{ runner.os }}-php8.3-${{ hashFiles('**/composer.lock') }}
+          restore-keys: composer-${{ runner.os }}-php8.3-
+
+      # composer.lock is committed, so this is a lock-faithful install, not
+      # a re-resolve.
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Audit dependencies
+        run: composer audit
+
+      - name: Prepare environment
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+
+      # phpunit.xml points the suite at buddypay_test on 127.0.0.1:5432.
+      - name: Create test database
+        env:
+          PGPASSWORD: buddypay
+        run: createdb -h 127.0.0.1 -p 5432 -U buddypay buddypay_test
+
+      - name: Migrate
+        run: php artisan migrate --force
+
+      - name: Tests
+        run: php artisan test
+
+      - name: Static analysis (PHPStan / Larastan)
+        run: ./vendor/bin/phpstan analyse --memory-limit=1G --no-progress
+
+      # Currently fails project-wide on pre-existing formatting debt.
+      # Left non-fatal so it reports without blocking; make it fatal once
+      # the codebase has had a single `./vendor/bin/pint` sweep.
+      - name: Code style (Pint)
+        run: ./vendor/bin/pint --test
+        continue-on-error: true

@@ -492,6 +492,21 @@ Honest state of the branch, so nobody assumes more than is true.
 - Full PHP syntax sweep passes; no duplicate method declarations.
 - Filament routes register; the `/api/v1/admin/*` API is intact alongside.
 - Composer resolves against PHP 8.3 (matches the Docker image).
+- **Upgraded to Laravel 12.68.0 (2026-08-29)**, resolving CVE-2026-48019 and
+  the other advisories that `^11.31` couldn't avoid. `composer audit` now
+  reports clean. `nunomaduro/larastan` (abandoned, capped at Laravel 11)
+  was swapped for the maintained `larastan/larastan` (`^3.10`, which also
+  required bumping `phpstan/phpstan` to `^2.2` — two config keys removed in
+  PHPStan 2.0, `checkMissingIterableValueType`/`checkGenericClassInNonGenericObjectType`,
+  were dropped from `phpstan.neon.dist` accordingly, their behaviour now
+  folded into rule levels rather than user-configurable). Filament 3,
+  Sanctum, Horizon, and Tinker needed no constraint changes — their
+  existing ranges already resolved Laravel-12-compatible versions.
+  **Laravel 13 is not yet reachable**: Filament 3 caps at
+  `illuminate/support ^12.0` and has no Laravel 13 support (v3 is in
+  feature-freeze), so reaching 13 needs a Filament 4/5 migration first —
+  tracked as a separate, later item, not bundled with this security-driven
+  upgrade.
 
 **Not verified**
 
@@ -528,11 +543,27 @@ Honest state of the branch, so nobody assumes more than is true.
   while the portal also documents an AES-encrypted NIP Merchant-Payout
   product. Until Wema confirms, treat Wema traffic as UAT-only.
 - **The Docker image has not been built successfully in this environment.**
-  The base-image pull could not complete behind the local proxy. The
-  Dockerfile and the platform pin are believed correct but unproven.
-- **The test suite is not green.** Last full run: **65 passing / 77
-  failing**. Most failures are broken test fixtures rather than broken
-  application code (see TODO).
+  No Docker daemon/CLI is available here to attempt it. The Dockerfile's
+  dependency-install step was fixed on 2026-08-29 to `COPY composer.json
+  composer.lock ./` + `composer install` (composer.lock has been committed
+  for a while; the Dockerfile just hadn't caught up) instead of resolving
+  fresh with `composer update` at build time — a real reproducibility gap
+  (the image could silently drift from what was actually tested) — but the
+  build itself is still unproven end to end.
+- **The test suite is not green.** Current full run (2026-08-29, against a
+  local Postgres 16): **69 passing / 101 failing, 170 total** — the suite
+  has grown substantially since the last count here. **Confirmed unrelated
+  to the Laravel 12 upgrade**: the identical test run (same 170 tests, same
+  69/101 split, same failing test names) was reproduced against the prior
+  Laravel 11.56.1 lock before restoring the upgrade — the Laravel bump
+  changed nothing about pass/fail outcomes. The dominant failure mode is
+  `UnknownLedgerAccountException` on `WALLET:{id}`, spread across nearly
+  every feature area (Kuda, Monnify, Wema, FCM, registration, admin config,
+  idempotency, outbox) — consistent with one shared test-fixture gap
+  (likely: factories creating `Wallet` rows without going through
+  `WalletService::createUserWallet()`, which is what actually creates the
+  matching ledger account) rather than 101 unrelated bugs. Not investigated
+  further as part of the Laravel upgrade — see TODO.
 
 ## TODO
 
@@ -574,26 +605,33 @@ Honest state of the branch, so nobody assumes more than is true.
 
 ### Infrastructure
 
-- [ ] **Turn CI on.** The workflow is written and parked at
-      `.github/workflows/ci.yml.disabled`; nothing gates a push until it is
-      enabled. Blocked on the GitHub App lacking the `workflows` permission —
-      grant it, or commit the enabled file manually from an account that has
-      it. Then: rename to `ci.yml`, uncomment, push.
-  - [ ] Once the framework advisory is resolved, delete the
-        `--no-security-blocking` flag from the install step so new advisories
-        fail the build again.
+- [x] **Turn CI on.** Renamed to `ci.yml` and uncommented on 2026-08-29.
+      Still may be blocked on the GitHub App lacking the `workflows`
+      permission — if the push of this file itself fails or is rejected,
+      grant the permission or push it manually from an account that has it.
+  - [x] Framework advisory resolved (Laravel 12.68.0) — the
+        `--no-security-blocking` flag is gone from the install step, and
+        `composer audit` is now a real (fatal) step, not advisory-only.
   - [ ] Once the codebase has had a Pint sweep, drop `continue-on-error`
         from the code-style step to make it enforcing.
 - [ ] **Build the Docker image end to end** and confirm the platform pin
-      holds inside the container.
+      holds inside the container. The install step was fixed to use the
+      committed `composer.lock` (2026-08-29), but the build itself is still
+      unproven — no Docker daemon available in this environment either.
 - [ ] `composer analyse` fails project-wide on Pint formatting (pre-existing,
       unrelated to any recent change). Decide whether to reformat in one
       sweep or relax the rules.
-- [ ] `laravel/framework` is pinned `^11.31`, and **every** version that
-      constraint can resolve to carries an unpatched advisory, including
-      **CVE-2026-48019** (CRLF injection in the default email rule). Fixes
-      only exist in 12.60+/13.10+. Composer's advisory check has to be
-      bypassed to install at all. This is a framework-upgrade decision.
+- [x] ~~`laravel/framework` is pinned `^11.31`...~~ **Upgraded to 12.68.0
+      on 2026-08-29** (see Current status). Laravel 13 deliberately not
+      pursued yet — blocked on Filament 3 having no Laravel 13 support;
+      that's its own future migration, not folded into this one.
+- [ ] **Get the test suite green.** 69/170 passing as of 2026-08-29 (see
+      Current status) — confirmed unaffected by the Laravel 12 upgrade, so
+      this is unblocked and independent work, not something the upgrade is
+      waiting on. Likely one shared root cause (`WalletService::createUserWallet()`
+      not being used by whatever creates test wallets) rather than 101
+      separate bugs — worth checking that hypothesis first before fixing
+      failures one by one.
 
 ### Correctness / product decisions
 
