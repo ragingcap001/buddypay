@@ -104,7 +104,11 @@ class AuthController extends Controller
         // Throws FinancialException (OTP_INVALID / OTP_EXPIRED / OTP_LOCKED) on failure.
         $this->otp->verify($challenge, (string) $request->input('otp'));
 
-        $user->update(['email_verified_at' => now()]);
+        // Not a mass-assignment update() — email_verified_at is deliberately
+        // absent from $fillable (a client must never be able to set it via
+        // request input), so this has to bypass that guard directly.
+        $user->email_verified_at = now();
+        $user->save();
         $this->devices->recordLogin($user, $request);
         $this->audit->log('auth.email_verified', $user, $user);
 
