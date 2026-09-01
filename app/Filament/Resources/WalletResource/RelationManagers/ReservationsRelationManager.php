@@ -24,7 +24,7 @@ class ReservationsRelationManager extends RelationManager
                     ->alignEnd(),
                 Tables\Columns\TextColumn::make('status')
                     ->badge()
-                    ->color(fn (string $s): string => match ($s) {
+                    ->color(fn (string $state): string => match ($state) {
                         'ACTIVE' => 'warning',
                         'COMMITTED' => 'success',
                         default => 'gray',

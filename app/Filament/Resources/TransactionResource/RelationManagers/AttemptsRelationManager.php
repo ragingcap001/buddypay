@@ -34,7 +34,7 @@ class AttemptsRelationManager extends RelationManager
                     }),
                 Tables\Columns\TextColumn::make('duration_ms')
                     ->label('Duration')
-                    ->formatStateUsing(fn (?int $s): string => $s === null ? '—' : "{$s} ms")
+                    ->formatStateUsing(fn (?int $state): string => $state === null ? '—' : "{$state} ms")
                     ->alignEnd(),
                 Tables\Columns\TextColumn::make('error')->wrap()->color('danger')->placeholder('—'),
                 Tables\Columns\TextColumn::make('created_at')->dateTime()->since()->sortable(),

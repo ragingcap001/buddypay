@@ -8,7 +8,6 @@ use App\Filament\Resources\TransactionResource\RelationManagers;
 use App\Models\Provider;
 use App\Models\Transaction;
 use Filament\Forms\Components\DatePicker;
-use Filament\Infolists\Components\KeyValueEntry;
 use Filament\Infolists\Components\Section;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Infolists\Infolist;
@@ -135,7 +134,13 @@ class TransactionResource extends Resource
                     TextEntry::make('completed_at')->dateTime()->placeholder('—'),
                 ]),
             Section::make('Metadata')
-                ->schema([KeyValueEntry::make('metadata')])
+                ->schema([
+                    TextEntry::make('metadata')
+                        ->label('')
+                        ->formatStateUsing(fn (?array $state): string => json_encode($state ?? [], JSON_PRETTY_PRINT))
+                        ->extraAttributes(['style' => 'white-space: pre-wrap; font-family: monospace;'])
+                        ->columnSpanFull(),
+                ])
                 ->collapsible()
                 ->collapsed(),
         ]);

@@ -65,7 +65,7 @@ class UserResource extends Resource
                 Tables\Columns\IconColumn::make('phone_verified_at')->label('Verified')->boolean(),
                 Tables\Columns\TextColumn::make('status')
                     ->badge()
-                    ->color(fn (string $s): string => match ($s) {
+                    ->color(fn (string $state): string => match ($state) {
                         'ACTIVE' => 'success',
                         'SUSPENDED' => 'warning',
                         'CLOSED' => 'danger',

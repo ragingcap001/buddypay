@@ -10,7 +10,6 @@ use Filament\Forms\Components\Section as FormSection;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Form;
-use Filament\Infolists\Components\KeyValueEntry;
 use Filament\Infolists\Components\Section;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Infolists\Infolist;
@@ -66,12 +65,12 @@ class ProviderResource extends Resource
                 Tables\Columns\TextColumn::make('type')->badge()->color('gray'),
                 Tables\Columns\TextColumn::make('status')
                     ->badge()
-                    ->color(fn (string $s): string => $s === Provider::STATUS_ACTIVE ? 'success' : 'danger'),
+                    ->color(fn (string $state): string => $state === Provider::STATUS_ACTIVE ? 'success' : 'danger'),
                 Tables\Columns\TextColumn::make('circuit')
                     ->label('Circuit')
                     ->state(fn (Provider $r): string => app(CircuitBreaker::class)->state($r->name)->value)
                     ->badge()
-                    ->color(fn (string $s): string => match (strtoupper($s)) {
+                    ->color(fn (string $state): string => match (strtoupper($state)) {
                         'CLOSED' => 'success',
                         'HALF_OPEN' => 'warning',
                         'OPEN' => 'danger',
@@ -119,7 +118,13 @@ class ProviderResource extends Resource
                 TextEntry::make('base_url')->label('Base URL')->copyable()->placeholder('—'),
             ]),
             Section::make('Config')
-                ->schema([KeyValueEntry::make('config')])
+                ->schema([
+                    TextEntry::make('config')
+                        ->label('')
+                        ->formatStateUsing(fn (?array $state): string => json_encode($state ?? [], JSON_PRETTY_PRINT))
+                        ->extraAttributes(['style' => 'white-space: pre-wrap; font-family: monospace;'])
+                        ->columnSpanFull(),
+                ])
                 ->collapsible()
                 ->collapsed(),
         ]);
