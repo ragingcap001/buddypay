@@ -512,7 +512,23 @@ Honest state of the branch, so nobody assumes more than is true.
 
 - **The Filament panel has not been exercised against a running database.**
   Routes resolve and the code parses, but no page has been loaded, no form
-  saved, and no login performed.
+  saved, and no login performed. The panel was **upgraded to Filament 4**
+  on 2026-09-01 (code port complete: `Form`/`Infolist` → `Schema` with
+  `components()`, table `actions()` → `recordActions()`, `canCreate()` →
+  `getCreateAuthorizationResponse()`, v4-compatible page traits; v3
+  defaults preserved via `Section::columnSpanFull()` +
+  `Table::deferFilters(false)` in `AppServiceProvider`). **The upgrade is
+  not live yet** — this environment has no PHP/Composer, so the
+  `composer.lock` still pins Filament 3.3.55. To finish (any environment
+  with PHP 8.3 + Composer):
+  1. `composer update filament/filament -W` (regenerates the lock on 4.x;
+     commit the new `composer.lock`),
+  2. `php artisan filament:upgrade` (republishes the v4 assets — the old
+     v3 builds under `public/{css,js}/filament` were removed; commit the
+     republished files),
+  3. `docker compose up`, log in at `/admin`, and exercise every resource,
+     both custom pages (Runtime config, Preferences) and the dashboard
+     widgets — the panel's first real QA pass.
 - **Provider integrations were cross-checked against the public docs on
   2026-08-27 (two passes) and 2026-08-28 (Monnify funding, see Phase 3
   below).** Kuda is aligned (auth, envelope, short refs, TSQ-first
@@ -623,8 +639,15 @@ Honest state of the branch, so nobody assumes more than is true.
       sweep or relax the rules.
 - [x] ~~`laravel/framework` is pinned `^11.31`...~~ **Upgraded to 12.68.0
       on 2026-08-29** (see Current status). Laravel 13 deliberately not
-      pursued yet — blocked on Filament 3 having no Laravel 13 support;
-      that's its own future migration, not folded into this one.
+      pursued yet — was blocked on Filament 3 having no Laravel 13 support;
+      Filament 3 was upgraded to 4 on 2026-09-01, so the 13 question
+      needs re-checking against the Filament 4/5 requirements when it
+      matters.
+- [ ] **Finish the Filament 4 upgrade** (code port is done; see the
+      Not-verified section for the three remaining steps: regenerate
+      `composer.lock`, republish v4 assets, panel QA pass). Until the lock
+      is regenerated, CI installs Filament 3 from the stale lock while the
+      code expects 4 — expected red, not a regression.
 - [ ] **Get the test suite green.** 69/170 passing as of 2026-08-29 (see
       Current status) — confirmed unaffected by the Laravel 12 upgrade, so
       this is unblocked and independent work, not something the upgrade is

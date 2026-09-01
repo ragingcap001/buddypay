@@ -26,9 +26,6 @@ class EventsRelationManager extends RelationManager
                 Tables\Columns\TextColumn::make('reason')->wrap(),
                 Tables\Columns\TextColumn::make('created_at')->dateTime()->since()->sortable(),
             ])
-            ->defaultSort('created_at')
-            ->headerActions([])
-            ->actions([])
-            ->bulkActions([]);
+            ->defaultSort('created_at');
     }
 }

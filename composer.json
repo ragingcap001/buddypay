@@ -12,7 +12,7 @@
     "license": "MIT",
     "require": {
         "php": "^8.3",
-        "filament/filament": "^3.3",
+        "filament/filament": "^4.0",
         "laravel/framework": "^12.60",
         "laravel/horizon": "^5.24",
         "laravel/sanctum": "^4.0",

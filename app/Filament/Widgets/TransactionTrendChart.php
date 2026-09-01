@@ -8,7 +8,7 @@ use Filament\Widgets\ChartWidget;
 
 class TransactionTrendChart extends ChartWidget
 {
-    protected static ?string $heading = 'Completed transactions (last 14 days)';
+    protected ?string $heading = 'Completed transactions (last 14 days)';
 
     protected function getData(): array
     {

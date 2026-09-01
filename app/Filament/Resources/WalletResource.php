@@ -4,12 +4,13 @@ namespace App\Filament\Resources;
 
 use App\Filament\Resources\WalletResource\Pages;
 use App\Models\Wallet;
-use Filament\Infolists\Components\Section;
 use Filament\Infolists\Components\TextEntry;
-use Filament\Infolists\Infolist;
 use Filament\Resources\Resource;
+use Filament\Schemas\Components\Section;
+use Filament\Schemas\Schema;
 use Filament\Tables;
 use Filament\Tables\Table;
+use Illuminate\Auth\Access\Response;
 
 /**
  * Read-only: balances are only correct as a side effect of the ledger.
@@ -58,20 +59,19 @@ class WalletResource extends Resource
                     ->label('Has an active reservation')
                     ->query(fn ($q) => $q->where('reserved_balance', '>', 0)),
             ])
-            ->actions([Tables\Actions\ViewAction::make()])
-            ->bulkActions([]);
+            ->recordActions([Tables\Actions\ViewAction::make()]);
     }
 
-    public static function infolist(Infolist $infolist): Infolist
+    public static function infolist(Schema $schema): Schema
     {
-        return $infolist->schema([
-            Section::make('Wallet')->columns(2)->schema([
+        return $schema->components([
+            Section::make('Wallet')->columns(2)->components([
                 TextEntry::make('user.name')->label('Customer'),
                 TextEntry::make('user.phone')->label('Phone'),
                 TextEntry::make('currency'),
                 TextEntry::make('created_at')->dateTime(),
             ]),
-            Section::make('Balances')->columns(3)->schema([
+            Section::make('Balances')->columns(3)->components([
                 TextEntry::make('control_balance')->label('Control')->money(fn (Wallet $r) => $r->currency, divideBy: 100),
                 TextEntry::make('reserved_balance')->label('Reserved')->money(fn (Wallet $r) => $r->currency, divideBy: 100),
                 TextEntry::make('available')
@@ -95,8 +95,9 @@ class WalletResource extends Resource
         ];
     }
 
-    public static function canCreate(): bool
+    // v4 calls the get*AuthorizationResponse() methods instead of can*().
+    public static function getCreateAuthorizationResponse(): Response
     {
-        return false;
+        return Response::deny('Wallets are created with the customer, not in the panel.');
     }
 }

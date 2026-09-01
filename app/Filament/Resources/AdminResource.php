@@ -5,10 +5,10 @@ namespace App\Filament\Resources;
 use App\Filament\Resources\AdminResource\Pages;
 use App\Models\Admin;
 use Filament\Facades\Filament;
-use Filament\Forms\Components\Section;
 use Filament\Forms\Components\TextInput;
-use Filament\Forms\Form;
 use Filament\Resources\Resource;
+use Filament\Schemas\Components\Section;
+use Filament\Schemas\Schema;
 use Filament\Tables;
 use Filament\Tables\Table;
 use Illuminate\Support\Facades\Hash;
@@ -31,10 +31,10 @@ class AdminResource extends Resource
 
     protected static ?string $pluralModelLabel = 'staff accounts';
 
-    public static function form(Form $form): Form
+    public static function form(Schema $schema): Schema
     {
-        return $form->schema([
-            Section::make('Account')->columns(2)->schema([
+        return $schema->components([
+            Section::make('Account')->columns(2)->components([
                 TextInput::make('name')->required()->maxLength(255),
                 TextInput::make('email')->email()->required()->unique(ignoreRecord: true)->maxLength(255),
                 TextInput::make('password')
@@ -60,13 +60,12 @@ class AdminResource extends Resource
                 Tables\Columns\TextColumn::make('created_at')->label('Added')->since()->sortable(),
             ])
             ->defaultSort('created_at', 'desc')
-            ->actions([
+            ->recordActions([
                 Tables\Actions\EditAction::make(),
                 Tables\Actions\DeleteAction::make()
                     // Locking yourself out of the only admin panel is a bad afternoon.
                     ->hidden(fn (Admin $record): bool => $record->is(Filament::auth()->user())),
-            ])
-            ->bulkActions([]);
+            ]);
     }
 
     public static function getPages(): array

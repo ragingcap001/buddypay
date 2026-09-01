@@ -5,16 +5,15 @@ namespace App\Filament\Resources;
 use App\Domain\Users\Enums\UserStatus;
 use App\Filament\Resources\UserResource\Pages;
 use App\Models\User;
-use Filament\Forms\Components\Section as FormSection;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
-use Filament\Forms\Form;
-use Filament\Infolists\Components\Section;
 use Filament\Infolists\Components\TextEntry;
-use Filament\Infolists\Infolist;
 use Filament\Resources\Resource;
+use Filament\Schemas\Components\Section;
+use Filament\Schemas\Schema;
 use Filament\Tables;
 use Filament\Tables\Table;
+use Illuminate\Auth\Access\Response;
 
 /**
  * Customer accounts. Editable only for what support legitimately touches
@@ -43,10 +42,10 @@ class UserResource extends Resource
         ];
     }
 
-    public static function form(Form $form): Form
+    public static function form(Schema $schema): Schema
     {
-        return $form->schema([
-            FormSection::make('Profile')->columns(2)->schema([
+        return $schema->components([
+            Section::make('Profile')->columns(2)->components([
                 TextInput::make('name')->required()->maxLength(255),
                 TextInput::make('email')->email()->maxLength(255),
                 TextInput::make('phone')->disabled()->dehydrated(false),
@@ -82,17 +81,16 @@ class UserResource extends Resource
             ->filters([
                 Tables\Filters\SelectFilter::make('status')->options(self::statusOptions()),
             ])
-            ->actions([
+            ->recordActions([
                 Tables\Actions\ViewAction::make(),
                 Tables\Actions\EditAction::make(),
-            ])
-            ->bulkActions([]);
+            ]);
     }
 
-    public static function infolist(Infolist $infolist): Infolist
+    public static function infolist(Schema $schema): Schema
     {
-        return $infolist->schema([
-            Section::make('Customer')->columns(3)->schema([
+        return $schema->components([
+            Section::make('Customer')->columns(3)->components([
                 TextEntry::make('name'),
                 TextEntry::make('phone')->copyable(),
                 TextEntry::make('email')->placeholder('—'),
@@ -100,12 +98,12 @@ class UserResource extends Resource
                 TextEntry::make('phone_verified_at')->label('Phone verified')->dateTime()->placeholder('Not verified'),
                 TextEntry::make('created_at')->label('Joined')->dateTime(),
             ]),
-            Section::make('Wallet')->columns(3)->schema([
+            Section::make('Wallet')->columns(3)->components([
                 TextEntry::make('wallet.currency')->label('Currency')->placeholder('—'),
                 TextEntry::make('wallet.control_balance')->label('Balance')->money('NGN', divideBy: 100)->placeholder('—'),
                 TextEntry::make('wallet.reserved_balance')->label('Reserved')->money('NGN', divideBy: 100)->placeholder('—'),
             ]),
-            Section::make('KYC')->columns(2)->schema([
+            Section::make('KYC')->columns(2)->components([
                 TextEntry::make('kycProfile.tier')->label('Tier')->placeholder('—'),
                 TextEntry::make('kycProfile.status')->label('Status')->badge()->placeholder('—'),
             ]),
@@ -121,8 +119,9 @@ class UserResource extends Resource
         ];
     }
 
-    public static function canCreate(): bool
+    // v4 calls the get*AuthorizationResponse() methods instead of can*().
+    public static function getCreateAuthorizationResponse(): Response
     {
-        return false;
+        return Response::deny('Customer accounts come from registration.');
     }
 }

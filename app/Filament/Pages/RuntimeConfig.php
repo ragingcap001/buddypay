@@ -5,14 +5,14 @@ namespace App\Filament\Pages;
 use App\Domain\Audit\Services\AuditService;
 use App\Domain\Config\Services\AppConfigService;
 use Filament\Facades\Filament;
-use Filament\Forms\Components\Section;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
-use Filament\Forms\Concerns\InteractsWithForms;
-use Filament\Forms\Contracts\HasForms;
-use Filament\Forms\Form;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
+use Filament\Schemas\Components\Section;
+use Filament\Schemas\Concerns\InteractsWithSchemas;
+use Filament\Schemas\Contracts\HasSchemas;
+use Filament\Schemas\Schema;
 
 /**
  * Runtime provider/config editor — the Filament port of the Blade admin
@@ -25,9 +25,9 @@ use Filament\Pages\Page;
  *  - every save is audit-logged with the actor and the keys touched,
  *    never the values.
  */
-class RuntimeConfig extends Page implements HasForms
+class RuntimeConfig extends Page implements HasSchemas
 {
-    use InteractsWithForms;
+    use InteractsWithSchemas;
 
     protected static ?string $navigationIcon = 'heroicon-o-adjustments-horizontal';
 
@@ -66,7 +66,7 @@ class RuntimeConfig extends Page implements HasForms
         return $state;
     }
 
-    public function form(Form $form): Form
+    public function form(Schema $schema): Schema
     {
         $config = app(AppConfigService::class);
         $all = $config->all();
@@ -105,12 +105,12 @@ class RuntimeConfig extends Page implements HasForms
 
             $sections[] = Section::make($definition['label'] ?? $group)
                 ->description('Saved values override the environment without a redeploy.')
-                ->schema($fields)
+                ->components($fields)
                 ->collapsible()
                 ->collapsed();
         }
 
-        return $form->schema($sections)->statePath('data');
+        return $schema->components($sections)->statePath('data');
     }
 
     public function save(): void

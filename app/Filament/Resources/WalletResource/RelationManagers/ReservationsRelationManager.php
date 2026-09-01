@@ -33,9 +33,6 @@ class ReservationsRelationManager extends RelationManager
                 Tables\Columns\TextColumn::make('release_reason')->placeholder('—')->toggleable(),
                 Tables\Columns\TextColumn::make('created_at')->dateTime()->since()->sortable(),
             ])
-            ->defaultSort('created_at', 'desc')
-            ->headerActions([])
-            ->actions([])
-            ->bulkActions([]);
+            ->defaultSort('created_at', 'desc');
     }
 }

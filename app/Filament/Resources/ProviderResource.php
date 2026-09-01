@@ -6,16 +6,15 @@ use App\Domain\Providers\Services\CircuitBreaker;
 use App\Filament\Resources\ProviderResource\Pages;
 use App\Models\Provider;
 use App\Models\ProviderAttempt;
-use Filament\Forms\Components\Section as FormSection;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
-use Filament\Forms\Form;
-use Filament\Infolists\Components\Section;
 use Filament\Infolists\Components\TextEntry;
-use Filament\Infolists\Infolist;
 use Filament\Resources\Resource;
+use Filament\Schemas\Components\Section;
+use Filament\Schemas\Schema;
 use Filament\Tables;
 use Filament\Tables\Table;
+use Illuminate\Auth\Access\Response;
 
 /**
  * Provider health, and the one operational lever worth having in a UI:
@@ -33,10 +32,10 @@ class ProviderResource extends Resource
 
     protected static ?int $navigationSort = 20;
 
-    public static function form(Form $form): Form
+    public static function form(Schema $schema): Schema
     {
-        return $form->schema([
-            FormSection::make('Provider')->columns(2)->schema([
+        return $schema->components([
+            Section::make('Provider')->columns(2)->components([
                 TextInput::make('display_name')->disabled()->dehydrated(false),
                 TextInput::make('name')->disabled()->dehydrated(false),
                 TextInput::make('type')->disabled()->dehydrated(false),
@@ -99,17 +98,16 @@ class ProviderResource extends Resource
                     Provider::STATUS_DISABLED => 'Disabled',
                 ]),
             ])
-            ->actions([
+            ->recordActions([
                 Tables\Actions\ViewAction::make(),
                 Tables\Actions\EditAction::make(),
-            ])
-            ->bulkActions([]);
+            ]);
     }
 
-    public static function infolist(Infolist $infolist): Infolist
+    public static function infolist(Schema $schema): Schema
     {
-        return $infolist->schema([
-            Section::make('Provider')->columns(3)->schema([
+        return $schema->components([
+            Section::make('Provider')->columns(3)->components([
                 TextEntry::make('display_name')->label('Name'),
                 TextEntry::make('name')->label('Key'),
                 TextEntry::make('type')->badge(),
@@ -118,7 +116,7 @@ class ProviderResource extends Resource
                 TextEntry::make('base_url')->label('Base URL')->copyable()->placeholder('—'),
             ]),
             Section::make('Config')
-                ->schema([
+                ->components([
                     TextEntry::make('config')
                         ->label('')
                         ->formatStateUsing(fn (?array $state): string => json_encode($state ?? [], JSON_PRETTY_PRINT))
@@ -139,8 +137,10 @@ class ProviderResource extends Resource
         ];
     }
 
-    public static function canCreate(): bool
+    // Providers are seeded/migrated, not created in the panel. v4 calls the
+    // get*AuthorizationResponse() methods instead of can*().
+    public static function getCreateAuthorizationResponse(): Response
     {
-        return false;
+        return Response::deny('Providers are seeded by migrations, not created in the panel.');
     }
 }

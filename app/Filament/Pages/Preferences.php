@@ -5,14 +5,14 @@ namespace App\Filament\Pages;
 use App\Domain\Audit\Services\AuditService;
 use App\Domain\Preferences\Services\PreferenceService;
 use Filament\Facades\Filament;
-use Filament\Forms\Components\Section;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Toggle;
-use Filament\Forms\Concerns\InteractsWithForms;
-use Filament\Forms\Contracts\HasForms;
-use Filament\Forms\Form;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
+use Filament\Schemas\Components\Section;
+use Filament\Schemas\Concerns\InteractsWithSchemas;
+use Filament\Schemas\Contracts\HasSchemas;
+use Filament\Schemas\Schema;
 
 /**
  * Public product feature flags + social links, read by mobile clients via
@@ -20,9 +20,9 @@ use Filament\Pages\Page;
  * Config: those are infra/provider secrets; these are public, non-secret
  * product toggles — different audience, different blast radius if wrong.
  */
-class Preferences extends Page implements HasForms
+class Preferences extends Page implements HasSchemas
 {
-    use InteractsWithForms;
+    use InteractsWithSchemas;
 
     protected static ?string $navigationIcon = 'heroicon-o-flag';
 
@@ -42,12 +42,12 @@ class Preferences extends Page implements HasForms
         $this->form->fill(app(PreferenceService::class)->get());
     }
 
-    public function form(Form $form): Form
+    public function form(Schema $schema): Schema
     {
-        return $form->schema([
+        return $schema->components([
             Section::make('Features')
                 ->description('Turned off here, a service disappears from the app entirely — as if it never existed.')
-                ->schema([
+                ->components([
                     Toggle::make('features.airtime')->label('Airtime'),
                     Toggle::make('features.data')->label('Data'),
                     Toggle::make('features.sme')->label('SME data'),
@@ -58,7 +58,7 @@ class Preferences extends Page implements HasForms
                 ])
                 ->columns(2),
             Section::make('Socials')
-                ->schema([
+                ->components([
                     TextInput::make('socials.facebook')->label('Facebook'),
                     TextInput::make('socials.instagram')->label('Instagram'),
                     TextInput::make('socials.twitter')->label('Twitter / X'),

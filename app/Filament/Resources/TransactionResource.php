@@ -8,12 +8,13 @@ use App\Filament\Resources\TransactionResource\RelationManagers;
 use App\Models\Provider;
 use App\Models\Transaction;
 use Filament\Forms\Components\DatePicker;
-use Filament\Infolists\Components\Section;
 use Filament\Infolists\Components\TextEntry;
-use Filament\Infolists\Infolist;
 use Filament\Resources\Resource;
+use Filament\Schemas\Components\Section;
+use Filament\Schemas\Schema;
 use Filament\Tables;
 use Filament\Tables\Table;
+use Illuminate\Auth\Access\Response;
 
 /**
  * Read-only. A transaction's status only ever moves through
@@ -100,7 +101,7 @@ class TransactionResource extends Resource
                     fn (): array => Provider::query()->pluck('name', 'name')->all(),
                 ),
                 Tables\Filters\Filter::make('created_at')
-                    ->form([
+                    ->schema([
                         DatePicker::make('from'),
                         DatePicker::make('until'),
                     ])
@@ -108,18 +109,17 @@ class TransactionResource extends Resource
                         ->when($data['from'] ?? null, fn ($q, $d) => $q->whereDate('created_at', '>=', $d))
                         ->when($data['until'] ?? null, fn ($q, $d) => $q->whereDate('created_at', '<=', $d))),
             ])
-            ->actions([
+            ->recordActions([
                 Tables\Actions\ViewAction::make(),
-            ])
-            ->bulkActions([]);
+            ]);
     }
 
-    public static function infolist(Infolist $infolist): Infolist
+    public static function infolist(Schema $schema): Schema
     {
-        return $infolist->schema([
+        return $schema->components([
             Section::make('Transaction')
                 ->columns(3)
-                ->schema([
+                ->components([
                     TextEntry::make('reference')->copyable()->fontFamily('mono'),
                     TextEntry::make('user.name')->label('Customer'),
                     TextEntry::make('type')->badge(),
@@ -134,7 +134,7 @@ class TransactionResource extends Resource
                     TextEntry::make('completed_at')->dateTime()->placeholder('—'),
                 ]),
             Section::make('Metadata')
-                ->schema([
+                ->components([
                     TextEntry::make('metadata')
                         ->label('')
                         ->formatStateUsing(fn (?array $state): string => json_encode($state ?? [], JSON_PRETTY_PRINT))
@@ -162,8 +162,9 @@ class TransactionResource extends Resource
         ];
     }
 
-    public static function canCreate(): bool
+    // v4 calls the get*AuthorizationResponse() methods instead of can*().
+    public static function getCreateAuthorizationResponse(): Response
     {
-        return false;
+        return Response::deny('Transactions are created by the API, not in the panel.');
     }
 }
