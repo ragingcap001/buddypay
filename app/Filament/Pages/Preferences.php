@@ -24,15 +24,15 @@ class Preferences extends Page implements HasSchemas
 {
     use InteractsWithSchemas;
 
-    protected static ?string $navigationIcon = 'heroicon-o-flag';
+    protected static string|\BackedEnum|null $navigationIcon = 'heroicon-o-flag';
 
-    protected static ?string $navigationGroup = 'Platform';
+    protected static string|\UnitEnum|null $navigationGroup = 'Platform';
 
     protected static ?int $navigationSort = 20;
 
     protected static ?string $title = 'Preferences';
 
-    protected static string $view = 'filament.pages.preferences';
+    protected string $view = 'filament.pages.preferences';
 
     /** @var array<string, mixed> */
     public array $data = [];

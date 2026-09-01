@@ -7,6 +7,7 @@ use App\Filament\Resources\TransactionResource\Pages;
 use App\Filament\Resources\TransactionResource\RelationManagers;
 use App\Models\Provider;
 use App\Models\Transaction;
+use Filament\Actions;
 use Filament\Forms\Components\DatePicker;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Resources\Resource;
@@ -26,9 +27,9 @@ class TransactionResource extends Resource
 {
     protected static ?string $model = Transaction::class;
 
-    protected static ?string $navigationIcon = 'heroicon-o-arrows-right-left';
+    protected static string|\BackedEnum|null $navigationIcon = 'heroicon-o-arrows-right-left';
 
-    protected static ?string $navigationGroup = 'Money';
+    protected static string|\UnitEnum|null $navigationGroup = 'Money';
 
     protected static ?int $navigationSort = 10;
 
@@ -110,7 +111,7 @@ class TransactionResource extends Resource
                         ->when($data['until'] ?? null, fn ($q, $d) => $q->whereDate('created_at', '<=', $d))),
             ])
             ->recordActions([
-                Tables\Actions\ViewAction::make(),
+                Actions\ViewAction::make(),
             ]);
     }
 
@@ -137,7 +138,11 @@ class TransactionResource extends Resource
                 ->components([
                     TextEntry::make('metadata')
                         ->label('')
-                        ->formatStateUsing(fn (?array $state): string => json_encode($state ?? [], JSON_PRETTY_PRINT))
+                        ->formatStateUsing(function (mixed $state): string {
+                            $decoded = is_string($state) ? json_decode($state, true) : $state;
+
+                            return json_encode($decoded ?? [], JSON_PRETTY_PRINT);
+                        })
                         ->extraAttributes(['style' => 'white-space: pre-wrap; font-family: monospace;'])
                         ->columnSpanFull(),
                 ])

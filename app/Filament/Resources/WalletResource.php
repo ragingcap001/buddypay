@@ -4,6 +4,7 @@ namespace App\Filament\Resources;
 
 use App\Filament\Resources\WalletResource\Pages;
 use App\Models\Wallet;
+use Filament\Actions;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Section;
@@ -20,9 +21,9 @@ class WalletResource extends Resource
 {
     protected static ?string $model = Wallet::class;
 
-    protected static ?string $navigationIcon = 'heroicon-o-wallet';
+    protected static string|\BackedEnum|null $navigationIcon = 'heroicon-o-wallet';
 
-    protected static ?string $navigationGroup = 'Money';
+    protected static string|\UnitEnum|null $navigationGroup = 'Money';
 
     protected static ?int $navigationSort = 20;
 
@@ -59,7 +60,7 @@ class WalletResource extends Resource
                     ->label('Has an active reservation')
                     ->query(fn ($q) => $q->where('reserved_balance', '>', 0)),
             ])
-            ->recordActions([Tables\Actions\ViewAction::make()]);
+            ->recordActions([Actions\ViewAction::make()]);
     }
 
     public static function infolist(Schema $schema): Schema

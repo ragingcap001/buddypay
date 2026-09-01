@@ -29,15 +29,15 @@ class RuntimeConfig extends Page implements HasSchemas
 {
     use InteractsWithSchemas;
 
-    protected static ?string $navigationIcon = 'heroicon-o-adjustments-horizontal';
+    protected static string|\BackedEnum|null $navigationIcon = 'heroicon-o-adjustments-horizontal';
 
-    protected static ?string $navigationGroup = 'Platform';
+    protected static string|\UnitEnum|null $navigationGroup = 'Platform';
 
     protected static ?int $navigationSort = 10;
 
     protected static ?string $title = 'Runtime config';
 
-    protected static string $view = 'filament.pages.runtime-config';
+    protected string $view = 'filament.pages.runtime-config';
 
     /** @var array<string, mixed> */
     public array $data = [];

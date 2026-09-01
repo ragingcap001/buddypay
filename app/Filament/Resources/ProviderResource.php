@@ -6,6 +6,7 @@ use App\Domain\Providers\Services\CircuitBreaker;
 use App\Filament\Resources\ProviderResource\Pages;
 use App\Models\Provider;
 use App\Models\ProviderAttempt;
+use Filament\Actions;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Infolists\Components\TextEntry;
@@ -26,9 +27,9 @@ class ProviderResource extends Resource
 {
     protected static ?string $model = Provider::class;
 
-    protected static ?string $navigationIcon = 'heroicon-o-server-stack';
+    protected static string|\BackedEnum|null $navigationIcon = 'heroicon-o-server-stack';
 
-    protected static ?string $navigationGroup = 'Platform';
+    protected static string|\UnitEnum|null $navigationGroup = 'Platform';
 
     protected static ?int $navigationSort = 20;
 
@@ -99,8 +100,8 @@ class ProviderResource extends Resource
                 ]),
             ])
             ->recordActions([
-                Tables\Actions\ViewAction::make(),
-                Tables\Actions\EditAction::make(),
+                Actions\ViewAction::make(),
+                Actions\EditAction::make(),
             ]);
     }
 
@@ -119,7 +120,11 @@ class ProviderResource extends Resource
                 ->components([
                     TextEntry::make('config')
                         ->label('')
-                        ->formatStateUsing(fn (?array $state): string => json_encode($state ?? [], JSON_PRETTY_PRINT))
+                        ->formatStateUsing(function (mixed $state): string {
+                            $decoded = is_string($state) ? json_decode($state, true) : $state;
+
+                            return json_encode($decoded ?? [], JSON_PRETTY_PRINT);
+                        })
                         ->extraAttributes(['style' => 'white-space: pre-wrap; font-family: monospace;'])
                         ->columnSpanFull(),
                 ])
