@@ -17,9 +17,13 @@ class RegisterRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'name' => ['required', 'string', 'max:100'],
-            'phone' => ['required', 'string', 'regex:/^(\+234|0)[789][01]\d{8}$/'],
-            'password' => ['required', 'string', 'min:8', 'confirmed'],
+            'firstName' => ['required', 'string', 'max:60'],
+            'lastName' => ['required', 'string', 'max:60'],
+            'email' => ['required', 'string', 'email', 'max:255', 'unique:users,email'],
+            'phone' => ['required', 'string', 'regex:/^(\+234|0)[789][01]\d{8}$/', 'unique:users,phone'],
+            'gender' => ['required', 'string', 'in:male,female'],
+            'password' => ['required', 'string', 'min:8'],
+            'passwordConfirmation' => ['required', 'string', 'same:password'],
         ];
     }
 
@@ -30,6 +34,7 @@ class RegisterRequest extends FormRequest
     {
         return [
             'phone.regex' => 'Enter a valid Nigerian phone number (e.g. 08031234567 or +2348031234567).',
+            'passwordConfirmation.same' => 'The password confirmation does not match.',
         ];
     }
 }

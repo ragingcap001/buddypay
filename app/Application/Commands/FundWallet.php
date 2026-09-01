@@ -17,6 +17,7 @@ final class FundWallet
         public readonly int $amountKobo,
         public readonly string $idempotencyKey,
         public readonly string $method = 'mock_bank',
+        public readonly ?string $provider = null,
         public readonly array $metadata = [],
     ) {
     }

@@ -31,23 +31,27 @@ use App\Exceptions\InvalidStateTransitionException;
 final class TransactionStateMachine
 {
     /**
-     * @var array<TransactionStatus, list<TransactionStatus>>
+     * Keyed by the enum's backing value, not the case itself: PHP array
+     * keys may only be int|string, so enum cases here are a fatal
+     * TypeError on the first lookup.
+     *
+     * @var array<string, list<TransactionStatus>>
      */
     private const ALLOWED_TRANSITIONS = [
-        TransactionStatus::Initiated => [TransactionStatus::Pending, TransactionStatus::Failed],
-        TransactionStatus::Pending => [TransactionStatus::Processing, TransactionStatus::Failed],
-        TransactionStatus::Processing => [TransactionStatus::Success, TransactionStatus::Failed, TransactionStatus::Ambiguous],
-        TransactionStatus::Ambiguous => [TransactionStatus::Verifying, TransactionStatus::Failed],
-        TransactionStatus::Verifying => [TransactionStatus::Success, TransactionStatus::Failed],
-        TransactionStatus::Success => [TransactionStatus::Completed, TransactionStatus::Reversed],
-        TransactionStatus::Completed => [],
-        TransactionStatus::Failed => [],
-        TransactionStatus::Reversed => [],
+        TransactionStatus::Initiated->value => [TransactionStatus::Pending, TransactionStatus::Failed],
+        TransactionStatus::Pending->value => [TransactionStatus::Processing, TransactionStatus::Failed],
+        TransactionStatus::Processing->value => [TransactionStatus::Success, TransactionStatus::Failed, TransactionStatus::Ambiguous],
+        TransactionStatus::Ambiguous->value => [TransactionStatus::Verifying, TransactionStatus::Failed],
+        TransactionStatus::Verifying->value => [TransactionStatus::Success, TransactionStatus::Failed],
+        TransactionStatus::Success->value => [TransactionStatus::Completed, TransactionStatus::Reversed],
+        TransactionStatus::Completed->value => [],
+        TransactionStatus::Failed->value => [],
+        TransactionStatus::Reversed->value => [],
     ];
 
     public static function canTransition(TransactionStatus $from, TransactionStatus $to): bool
     {
-        return in_array($to, self::ALLOWED_TRANSITIONS[$from] ?? [], true);
+        return in_array($to, self::ALLOWED_TRANSITIONS[$from->value] ?? [], true);
     }
 
     public static function assertCanTransition(TransactionStatus $from, TransactionStatus $to): void
@@ -59,6 +63,6 @@ final class TransactionStateMachine
 
     public static function isTerminal(TransactionStatus $status): bool
     {
-        return (self::ALLOWED_TRANSITIONS[$status] ?? []) === [];
+        return (self::ALLOWED_TRANSITIONS[$status->value] ?? []) === [];
     }
 }

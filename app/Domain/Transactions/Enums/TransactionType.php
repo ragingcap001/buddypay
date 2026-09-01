@@ -11,4 +11,5 @@ enum TransactionType: string
     case Electricity = 'ELECTRICITY';
     case CableTv = 'CABLE_TV';
     case Betting = 'BETTING';
+    case GiftCard = 'GIFT_CARD';
 }

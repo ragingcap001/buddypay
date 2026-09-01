@@ -12,6 +12,8 @@ final class FeeCalculationTest extends TestCase
 
     protected function setUp(): void
     {
+        parent::setUp();
+
         $this->service = new TransactionService();
     }
 

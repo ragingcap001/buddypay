@@ -62,7 +62,7 @@ final class MoneyTest extends TestCase
     public function test_comparisons(): void
     {
         $this->assertTrue(Money::naira(200)->isGreaterThan(Money::naira(199)));
-        $this->assertTrue(Money::naira(1).isLessThan(Money::naira(2)));
+        $this->assertTrue(Money::naira(1)->isLessThan(Money::naira(2)));
         $this->assertTrue(Money::naira(5)->equals(Money::naira(5)));
         $this->assertTrue(Money::naira(0)->isZero());
         $this->assertTrue(Money::naira(1)->isPositive());

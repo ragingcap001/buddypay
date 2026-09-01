@@ -75,6 +75,35 @@ final class OtpService
         $challenge->update(['consumed_at' => now()]);
     }
 
+    /**
+     * Validity check that does NOT consume the code — used by
+     * verify-reset-otp, which only unlocks the "set a new password"
+     * screen. The actual reset (reset-password) verifies the same code
+     * again via verify(), which does consume it. A failed attempt still
+     * counts against the lockout so this can't be used to brute-force
+     * around verify()'s attempt cap.
+     */
+    public function peek(OtpChallenge $challenge, string $code): bool
+    {
+        if ($challenge->consumed_at !== null || $challenge->expires_at->isPast()) {
+            return false;
+        }
+
+        $maxAttempts = (int) config('ase.otp.max_attempts', 5);
+
+        if ($challenge->attempts >= $maxAttempts) {
+            return false;
+        }
+
+        if (! hash_equals($challenge->code_hash, hash('sha256', $code))) {
+            $challenge->update(['attempts' => $challenge->attempts + 1]);
+
+            return false;
+        }
+
+        return true;
+    }
+
     public function latestChallenge(User $user, string $purpose): ?OtpChallenge
     {
         return OtpChallenge::where('user_id', $user->id)

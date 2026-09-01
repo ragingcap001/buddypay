@@ -14,6 +14,8 @@ final class CircuitBreakerTest extends TestCase
 
     protected function setUp(): void
     {
+        parent::setUp();
+
         config([
             'ase.circuit_breaker' => [
                 'failure_threshold' => 2,

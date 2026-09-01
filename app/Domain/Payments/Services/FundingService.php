@@ -96,7 +96,9 @@ final class FundingService
         });
 
         // --- Provider charge (outside the DB transaction) ------------------
-        $providerName = (string) config('ase.default_funding_provider', 'mock');
+        $providerName = $command->provider !== null && $command->provider !== ''
+            ? $command->provider
+            : (string) config('ase.default_funding_provider', 'mock');
 
         $response = $this->gateway->charge(
             $providerName,
@@ -104,11 +106,29 @@ final class FundingService
                 $providerName,
                 $total,
                 $transaction->reference,
-                null,
-                ['method' => $command->method],
+                $user->email,
+                [
+                    'method' => $command->method,
+                    'customer_name' => (string) $user->name,
+                    'customer_email' => (string) $user->email,
+                    'customer_phone' => (string) $user->phone,
+                ],
             ),
             $transaction,
         );
+
+        // Async funding providers return customer-facing deposit
+        // instructions (virtual account number, checkout URL, ...) — persist
+        // them on the transaction so the API can show them and /verify knows
+        // which provider to ask.
+        if ($response->paymentDetails !== [] || $transaction->provider === null) {
+            $transaction->update([
+                'provider' => $providerName,
+                // `metadata` is a nullable column; the array cast passes
+                // null through, and null + array would fatal.
+                'metadata' => ($transaction->metadata ?? []) + ['payment_details' => $response->paymentDetails],
+            ]);
+        }
 
         // --- Atomic outcome application ------------------------------------
         $this->applyOutcome(
@@ -157,7 +177,9 @@ final class FundingService
                 return $txn->fresh();
             }
 
-            $providerName = (string) config('ase.default_funding_provider', 'mock');
+            // Verify against the provider that actually took the charge, not
+            // the platform default.
+            $providerName = (string) ($txn->provider ?? config('ase.default_funding_provider', 'mock'));
 
             $response = $this->gateway->verifyCharge($providerName, $txn->provider_reference);
 
@@ -192,6 +214,13 @@ final class FundingService
         DB::transaction(function () use ($transactionReference, $providerName, $amountKobo, $fee, $outcome, $providerReference, $error): void {
             $txn = $this->transactions->findByReference($transactionReference);
 
+            // Record which provider took the charge in every outcome — the
+            // verification path must always ask the right provider.
+            $txn->update([
+                'provider' => $providerName,
+                'provider_reference' => $providerReference ?? $txn->provider_reference,
+            ]);
+
             if ($outcome === ProviderOutcome::DefinitiveSuccess) {
                 $wallet = $this->wallets->forUser((int) $txn->user_id);
 
@@ -202,11 +231,6 @@ final class FundingService
                     'Wallet funding ('.((string) ($txn->metadata['method'] ?? 'provider')).')',
                     'FUND_'.((string) $txn->reference),
                 );
-
-                $txn->update([
-                    'provider' => $providerName,
-                    'provider_reference' => $providerReference ?? $txn->provider_reference,
-                ]);
 
                 $this->transactions->transition($txn, TransactionStatus::Success, 'funding confirmed', [
                     'provider_reference' => $providerReference,

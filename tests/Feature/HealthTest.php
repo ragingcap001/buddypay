@@ -21,13 +21,21 @@ final class HealthTest extends TestCase
 
     public function test_health_endpoint_reports_unhealthy_when_database_down(): void
     {
+        $original = config('database.connections.pgsql.database');
+
         config(['database.connections.pgsql.database' => 'definitely-not-a-real-database']);
         \Illuminate\Support\Facades\DB::purge('pgsql');
 
-        $response = $this->getJson('/api/v1/health');
+        try {
+            $response = $this->getJson('/api/v1/health');
 
-        $response->assertStatus(503)
-            ->assertJsonPath('status', 'unhealthy')
-            ->assertJsonPath('checks.database.status', 'error');
+            $response->assertStatus(503)
+                ->assertJsonPath('status', 'unhealthy')
+                ->assertJsonPath('checks.database.status', 'error');
+        } finally {
+            // Restore before RefreshDatabase teardown re-creates the schema.
+            config(['database.connections.pgsql.database' => $original]);
+            \Illuminate\Support\Facades\DB::purge('pgsql');
+        }
     }
 }

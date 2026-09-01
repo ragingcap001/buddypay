@@ -4,7 +4,10 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Domain\Audit\Services\AuditService;
 use App\Domain\Payments\Services\FundingService;
+use App\Domain\Payments\Services\PayoutService;
+use App\Domain\Providers\DTOs\NormalizedWebhookEvent;
 use App\Domain\Providers\Enums\ProviderOutcome;
+use App\Domain\Providers\Services\ProviderWebhookNormalizer;
 use App\Domain\Transactions\Enums\TransactionStatus;
 use App\Domain\Transactions\Enums\TransactionType;
 use App\Http\Controllers\Controller;
@@ -15,14 +18,19 @@ use App\Models\Transaction;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Str;
 use Throwable;
 
 /**
  * Generic provider webhook receiver: POST /api/v1/webhooks/{provider}
  *
- * 1. Authenticate the provider (HMAC signature of the raw body).
- * 2. Validate + store the raw event.
+ * 1. Authenticate the provider:
+ *      - mock / wema / ...: HMAC-SHA256 of the raw body in
+ *        `X-Webhook-Signature`, keyed by the provider's webhook secret.
+ *      - monnify: HMAC-SHA512 of the raw body in `monnify-signature`, keyed
+ *        by the Monnify client SECRET key (production only — sandbox
+ *        notifications are unsigned, so no secret should be configured
+ *        when pointing the Monnify dashboard at a sandbox receiver).
+ * 2. Normalize the raw event (provider-specific shapes → one vocabulary).
  * 3. Enforce idempotency (provider + event id is unique).
  * 4. Update transaction state idempotently.
  * 5. Record an audit trail.
@@ -31,7 +39,11 @@ class WebhookController extends Controller
 {
     public function __construct(
         private readonly FundingService $funding,
+        private readonly PayoutService $payouts,
+        private readonly \App\Domain\Transactions\Services\BillPaymentService $billPayments,
+        private readonly ProviderWebhookNormalizer $normalizer,
         private readonly AuditService $audit,
+        private readonly \App\Domain\Config\Services\AppConfigService $appConfig,
     ) {
     }
 
@@ -43,21 +55,16 @@ class WebhookController extends Controller
             return ApiResponse::error('PROVIDER_NOT_FOUND', "Provider [{$providerName}] is not registered.", 404, $request);
         }
 
-        $secret = (string) config("ase.webhook_secrets.{$providerName}", '');
-        $signature = (string) $request->header('X-Webhook-Signature', '');
-        $expected = hash_hmac('sha256', $request->getContent(), $secret);
-
-        if ($secret === '' || ! hash_equals($expected, $signature)) {
+        if (! $this->signatureIsValid($providerName, $request)) {
             return ApiResponse::error('WEBHOOK_SIGNATURE_INVALID', 'Invalid webhook signature.', 401, $request);
         }
 
         $payload = (array) $request->json()->all();
-        $eventType = (string) ($payload['event_type'] ?? 'unknown');
-        $eventId = (string) ($payload['event_id'] ?? (string) Str::ulid());
+        $event = $this->normalizer->normalize($providerName, $payload);
 
         // Idempotency: repeated delivery must not duplicate financial effects.
         $existing = ProviderWebhook::where('provider_id', $provider->id)
-            ->where('provider_event_id', $eventId)
+            ->where('provider_event_id', $event->eventId)
             ->first();
 
         if ($existing !== null) {
@@ -69,14 +76,25 @@ class WebhookController extends Controller
 
         $webhook = ProviderWebhook::create([
             'provider_id' => $provider->id,
-            'event_type' => $eventType,
-            'provider_event_id' => $eventId,
+            'event_type' => $event->eventType,
+            'provider_event_id' => $event->eventId,
             'raw_payload' => $payload,
             'status' => ProviderWebhook::STATUS_RECEIVED,
         ]);
 
+        // Events that carry no definitive outcome (e.g. a PENDING callback)
+        // are stored for the audit trail and acknowledged, then ignored.
+        if ($event->eventType === NormalizedWebhookEvent::IGNORED || $event->reference === '') {
+            $webhook->update([
+                'status' => ProviderWebhook::STATUS_PROCESSED,
+                'processed_at' => now(),
+            ]);
+
+            return ApiResponse::success(['status' => 'RECEIVED'], 'Webhook event received');
+        }
+
         try {
-            $this->processEvent($providerName, $eventType, $payload);
+            $this->processEvent($providerName, $event);
 
             $webhook->update([
                 'status' => ProviderWebhook::STATUS_PROCESSED,
@@ -88,63 +106,183 @@ class WebhookController extends Controller
                 'error' => $e->getMessage(),
             ]);
 
-            Log::error("Webhook [{$providerName}] event [{$eventId}] failed: {$e->getMessage()}");
+            Log::error("Webhook [{$providerName}] event [{$event->eventId}] failed: {$e->getMessage()}");
 
             return ApiResponse::error('WEBHOOK_PROCESSING_FAILED', 'Webhook received but processing failed.', 500, $request);
         }
 
         $this->audit->log('webhook.received', $webhook, null, [
             'provider' => $providerName,
-            'event_type' => $eventType,
-            'event_id' => $eventId,
+            'event_type' => $event->eventType,
+            'event_id' => $event->eventId,
+            'reference' => $event->reference,
         ]);
 
         return ApiResponse::success(['status' => 'PROCESSED'], 'Webhook event processed');
     }
 
-    private function processEvent(string $providerName, string $eventType, array $payload): void
+    /**
+     * Verify the raw-body signature. The signature MUST be computed over the
+     * raw body bytes — never over the re-encoded JSON.
+     */
+    private function signatureIsValid(string $providerName, Request $request): bool
     {
-        $reference = (string) ($payload['reference'] ?? '');
+        $rawBody = $request->getContent();
 
-        if ($reference === '') {
-            return;
+        if ($providerName === 'monnify') {
+            // Monnify signs webhooks with the client secret (HMAC-SHA512).
+            // Admin-dashboard override first, MONNIFY_SECRET_KEY as fallback.
+            $secret = (string) ($this->appConfig->get('monnify', 'secret_key') ?? '');
+            $signature = (string) $request->header('monnify-signature', $request->header('X-Monnify-Signature', ''));
+
+            if ($secret === '' || $signature === '') {
+                return false;
+            }
+
+            return hash_equals(hash_hmac('sha512', $rawBody, $secret), $signature);
         }
 
-        $txn = Transaction::where('reference', $reference)->first();
+        if ($providerName === 'kuda') {
+            // Kuda does NOT use HTTP Basic Auth: it sends a plaintext
+            // `username` header and a Base64-encoded `password` header.
+            $username = (string) $request->header('username', '');
+            $encodedPassword = (string) $request->header('password', '');
+            $configuredUser = (string) ($this->appConfig->get('kuda', 'webhook_username') ?? '');
+            $configuredPassword = (string) ($this->appConfig->get('kuda', 'webhook_password') ?? '');
+
+            if ($configuredUser === '' || $configuredPassword === '' || $username === '') {
+                return false;
+            }
+
+            $password = base64_decode($encodedPassword, true);
+
+            return hash_equals($configuredUser, $username)
+                && is_string($password)
+                && hash_equals($configuredPassword, $password);
+        }
+
+        if ($providerName === 'wema') {
+            $secret = (string) ($this->appConfig->get('wema', 'webhook_secret') ?? '');
+        } else {
+            $secret = (string) config("ase.webhook_secrets.{$providerName}", '');
+        }
+        $signature = (string) $request->header('X-Webhook-Signature', '');
+
+        if ($secret === '' || $signature === '') {
+            return false;
+        }
+
+        return hash_equals(hash_hmac('sha256', $rawBody, $secret), $signature);
+    }
+
+    private function processEvent(string $providerName, NormalizedWebhookEvent $event): void
+    {
+        $txn = Transaction::where('reference', $event->reference)->first();
 
         if ($txn === null) {
             return; // No internal record — nothing to do (reconciliation will flag it).
         }
 
-        if (TransactionStatus::from($txn->status)->isTerminal()) {
+        $status = TransactionStatus::from($txn->status);
+
+        if ($status === TransactionStatus::Completed || $status === TransactionStatus::Reversed) {
             return; // Already settled — idempotent no-op.
         }
 
-        // This scaffold processes funding provider webhooks; bill provider
-        // events are verified via POST /transactions/{reference}/verify.
-        if ($txn->type !== TransactionType::WalletFunding->value) {
+        if ($status === TransactionStatus::Failed) {
+            // A FAILED transaction has no outgoing state-machine transition
+            // (by design — see TransactionStateMachine), so a genuine
+            // success arriving now cannot be applied to it, only reported.
+            // This is not always benign: wallet-funding retry() marks the
+            // superseded attempt FAILED without cancelling the one-time
+            // Monnify account behind it (no cancellation endpoint exists
+            // for that product), so a customer who transfers to the old
+            // account after a retry lands exactly here — money Monnify has
+            // that this transaction can no longer credit. Silently
+            // no-op'ing that is how it stays invisible until someone
+            // notices manually; log it critically instead so it surfaces.
+            if (in_array($event->eventType, ['payment.success', 'payout.success', 'bill.transaction'], true)) {
+                \Illuminate\Support\Facades\Log::critical(
+                    'Webhook reports success for an already-FAILED transaction — funds may be unrecovered, needs manual reconciliation',
+                    [
+                        'provider' => $providerName,
+                        'reference' => $txn->reference,
+                        'type' => $txn->type,
+                        'event_type' => $event->eventType,
+                        'event_id' => $event->eventId,
+                        'amount_kobo' => $event->amountKobo,
+                    ],
+                );
+            }
+
+            return; // Still a no-op — see the log above for why this can't safely self-heal here.
+        }
+
+        // Amount guard (per Monnify's integration guidance): never settle on
+        // a success event whose reported amount does not match what we
+        // initiated. A mismatch means a misrouted/duplicate notification —
+        // log, leave the transaction verifying, and let reconciliation flag
+        // it. (Funding: the customer pays amount + fee; payout: the
+        // disbursement is exactly the amount.)
+        if ($event->amountKobo !== null) {
+            $expected = $txn->type === TransactionType::WalletFunding->value
+                ? (int) $txn->amount + (int) $txn->fee
+                : (int) $txn->amount;
+
+            if ($event->amountKobo !== $expected) {
+                \Illuminate\Support\Facades\Log::critical('Webhook amount mismatch — refusing to settle', [
+                    'provider' => $providerName,
+                    'reference' => $txn->reference,
+                    'expected_kobo' => $expected,
+                    'reported_kobo' => $event->amountKobo,
+                    'event_type' => $event->eventType,
+                ]);
+
+                return;
+            }
+        }
+
+        // Kuda bill webhooks are notifications, not definitive outcomes —
+        // Kuda's own guidance is to confirm with BILL_TSQ. Route to the
+        // bill verification path (TSQ -> settle).
+        if ($event->eventType === 'bill.transaction') {
+            $this->billPayments->verify($event->reference);
+
             return;
         }
 
-        if ($eventType === 'payment.success') {
+        $outcome = match ($event->eventType) {
+            'payment.success', 'payout.success' => ProviderOutcome::DefinitiveSuccess,
+            'payment.failed', 'payout.failed' => ProviderOutcome::DefinitiveFailure,
+            default => null,
+        };
+
+        if ($outcome === null) {
+            return;
+        }
+
+        // Bill provider events are verified via POST /transactions/{ref}/verify;
+        // this receiver settles funding (deposits) and payout (transfers out)
+        // transactions.
+        if ($txn->type === TransactionType::WalletFunding->value) {
             $this->funding->applyOutcome(
                 $txn->reference,
                 $providerName,
                 (int) $txn->amount,
                 (int) $txn->fee,
-                ProviderOutcome::DefinitiveSuccess,
-                (string) ($payload['provider_reference'] ?? ''),
-                null,
+                $outcome,
+                $event->providerReference,
+                $event->error,
             );
-        } elseif ($eventType === 'payment.failed') {
-            $this->funding->applyOutcome(
+        } elseif ($txn->type === TransactionType::BankTransfer->value) {
+            $this->payouts->applyOutcome(
                 $txn->reference,
                 $providerName,
                 (int) $txn->amount,
                 (int) $txn->fee,
-                ProviderOutcome::DefinitiveFailure,
-                null,
-                (string) ($payload['error'] ?? 'webhook reported failure'),
+                $outcome,
+                $event->providerReference,
+                $event->error,
             );
         }
     }

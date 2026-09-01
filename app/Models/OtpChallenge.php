@@ -2,11 +2,12 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class OtpChallenge extends Model
 {
-    public const PURPOSE_REGISTER = 'REGISTER';
+    public const PURPOSE_EMAIL_VERIFY = 'EMAIL_VERIFY';
     public const PURPOSE_LOGIN = 'LOGIN';
     public const PURPOSE_PASSWORD_RESET = 'PASSWORD_RESET';
     public const PURPOSE_PIN_CHANGE = 'PIN_CHANGE';

@@ -16,6 +16,8 @@ use App\Domain\Transactions\Services\IdempotencyService;
 use App\Domain\Transactions\Services\TransactionService;
 use App\Domain\Wallet\Services\WalletService;
 use App\Infrastructure\Messaging\Events\OutboxEventDispatched;
+use Filament\Schemas\Components\Section;
+use Filament\Tables\Table;
 use App\Infrastructure\Messaging\OutboxPublisher;
 use App\Infrastructure\Providers\ProviderFactory;
 use App\Models\Transaction;
@@ -64,6 +66,18 @@ class AppServiceProvider extends ServiceProvider
             );
         });
 
+        $this->app->singleton(\App\Domain\GiftCards\Services\GiftCardPurchaseService::class, function ($app) {
+            return new \App\Domain\GiftCards\Services\GiftCardPurchaseService(
+                $app->make(WalletService::class),
+                $app->make(TransactionService::class),
+                $app->make(IdempotencyService::class),
+                $app->make(RiskEngine::class),
+                $app->make(ProviderGateway::class),
+                $app->make(OutboxService::class),
+                $app->make(\App\Infrastructure\Providers\ProviderFactory::class),
+            );
+        });
+
         $this->app->singleton(\App\Domain\Payments\Services\FundingService::class, function ($app) {
             return new \App\Domain\Payments\Services\FundingService(
                 $app->make(WalletService::class),
@@ -85,6 +99,18 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        // Filament v4 changed two defaults that our panel relies on
+        // (upgraded from v3, see the filament-v4 migration notes in
+        // DEVELOPMENT.md): Sections/Fields no longer span the full grid
+        // width, and table filters are deferred behind an Apply button.
+        // Restore the v3 behaviour app-wide rather than touching every
+        // resource.
+        Section::configureUsing(fn (Section $section) => $section
+            ->columnSpanFull());
+
+        Table::configureUsing(fn (Table $table) => $table
+            ->deferFilters(false));
+
         RateLimiter::for('auth', function (Request $request) {
             return Limit::perMinute(10)->by($request->ip());
         });
@@ -132,6 +158,19 @@ class AppServiceProvider extends ServiceProvider
                 $titles[$type],
                 "Your {$transaction->type} transaction {$reference} is {$statusText}.",
             );
+
+            // Database-channel record for the mobile "in-app notifications"
+            // list — kept separate from the SMS/push delivery above, since
+            // it must exist even for a user who never opted into push.
+            $user = $transaction->user;
+
+            if ($user !== null) {
+                $user->notify(match ($type) {
+                    'transaction.completed' => new \App\Notifications\V1\TransactionSuccessNotification($transaction),
+                    'transaction.failed' => new \App\Notifications\V1\TransactionFailedNotification($transaction),
+                    default => new \App\Notifications\V1\TransactionVerifyingNotification($transaction),
+                });
+            }
         });
     }
 }

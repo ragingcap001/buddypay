@@ -17,7 +17,7 @@ class VerifyPinRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'pin' => ['required', 'string', 'regex:/^\d{4}$/'],
+            'transactionPin' => ['required', 'string', 'regex:/^\d{4}$/'],
         ];
     }
 }

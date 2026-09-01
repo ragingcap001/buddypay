@@ -2,7 +2,9 @@
 
 namespace App\Console\Commands;
 
+use App\Domain\GiftCards\Services\GiftCardPurchaseService;
 use App\Domain\Payments\Services\FundingService;
+use App\Domain\Payments\Services\PayoutService;
 use App\Domain\Transactions\Enums\TransactionStatus;
 use App\Domain\Transactions\Enums\TransactionType;
 use App\Domain\Transactions\Services\BillPaymentService;
@@ -17,7 +19,7 @@ class VerifyStaleTransactions extends Command
 
     protected $description = 'Drive AMBIGUOUS/VERIFYING transactions to a definite outcome by asking the original provider (never failover)';
 
-    public function handle(BillPaymentService $billPayments, FundingService $funding): int
+    public function handle(BillPaymentService $billPayments, FundingService $funding, PayoutService $payouts, GiftCardPurchaseService $giftCards): int
     {
         $since = now()->subMinutes((int) $this->option('minutes'));
 
@@ -32,6 +34,10 @@ class VerifyStaleTransactions extends Command
             try {
                 if ($transaction->type === TransactionType::WalletFunding->value) {
                     $fresh = $funding->verifyReference($transaction);
+                } elseif ($transaction->type === TransactionType::BankTransfer->value) {
+                    $fresh = $payouts->verifyReference($transaction);
+                } elseif ($transaction->type === TransactionType::GiftCard->value) {
+                    $fresh = $giftCards->verify($transaction->reference);
                 } else {
                     $fresh = $billPayments->verify($transaction->reference);
                 }

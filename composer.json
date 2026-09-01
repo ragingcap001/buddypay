@@ -2,7 +2,7 @@
     "$schema": "https://getcomposer.org/schema.json",
     "name": "buddypay/ase-api",
     "type": "project",
-    "description": "Aṣẹ — Nigerian digital financial services platform API (wallet, double-entry ledger, bill payments).",
+    "description": "A\u1e63\u1eb9 \u2014 Nigerian digital financial services platform API (wallet, double-entry ledger, bill payments).",
     "keywords": [
         "fintech",
         "payments",
@@ -12,7 +12,8 @@
     "license": "MIT",
     "require": {
         "php": "^8.3",
-        "laravel/framework": "^11.31",
+        "filament/filament": "^4.0",
+        "laravel/framework": "^12.60",
         "laravel/horizon": "^5.24",
         "laravel/sanctum": "^4.0",
         "laravel/tinker": "^2.9"
@@ -22,10 +23,10 @@
         "laravel/pail": "^1.1",
         "laravel/pint": "^1.13",
         "laravel/sail": "^1.26",
+        "larastan/larastan": "^3.10",
         "mockery/mockery": "^1.6",
         "nunomaduro/collision": "^8.1",
-        "nunomaduro/larastan": "^2.9",
-        "phpstan/phpstan": "^1.12",
+        "phpstan/phpstan": "^2.2",
         "phpunit/phpunit": "^11.0.1"
     },
     "autoload": {
@@ -43,7 +44,8 @@
     "scripts": {
         "post-autoload-dump": [
             "Illuminate\\Foundation\\ComposerScripts::postAutoloadDump",
-            "@php artisan package:discover --ansi"
+            "@php artisan package:discover --ansi",
+            "@php artisan filament:upgrade"
         ],
         "post-update-cmd": [
             "@php artisan vendor:publish --tag=laravel-assets --ansi --force"
@@ -74,6 +76,9 @@
         }
     },
     "config": {
+        "platform": {
+            "php": "8.3.33"
+        },
         "optimize-autoloader": true,
         "preferred-install": "dist",
         "sort-packages": true,

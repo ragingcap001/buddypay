@@ -16,11 +16,12 @@ trait CreatesVerifiedUser
      */
     protected function verifiedUser(string $phone = '08031234567'): array
     {
-        // Financial base data (system ledger accounts, mock provider, bill
+        // Financial base data (system ledger accounts, providers, bill
         // catalog). Seeders are idempotent (firstOrCreate).
         $this->seed([
             \Database\Seeders\SystemAccountSeeder::class,
             \Database\Seeders\BillCatalogSeeder::class,
+            \Database\Seeders\ProviderSeeder::class,
         ]);
 
         $user = User::factory()->create([

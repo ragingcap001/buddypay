@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Foundation\Auth\User as Authenticatable;
@@ -10,8 +11,11 @@ use Laravel\Sanctum\HasApiTokens;
 
 class User extends Authenticatable
 {
-    /** @use \Illuminate\Database\Eloquent\Factories\HasFactory */
+    /** @use HasFactory<\Database\Factories\UserFactory> */
     use HasApiTokens, HasFactory, Notifiable;
+
+    public const ROLE_USER = 'user';
+    public const ROLE_ADMIN = 'admin';
 
     /**
      * The attributes that are mass assignable.
@@ -20,10 +24,15 @@ class User extends Authenticatable
      */
     protected $fillable = [
         'name',
+        'first_name',
+        'last_name',
         'phone',
         'email',
+        'gender',
+        'device_token',
         'password',
         'status',
+        'role',
         'pin_hash',
         'phone_verified_at',
     ];
@@ -81,5 +90,40 @@ class User extends Authenticatable
     public function isActive(): bool
     {
         return $this->status === \App\Domain\Users\Enums\UserStatus::Active->value;
+    }
+
+    public function isAdmin(): bool
+    {
+        return $this->role === self::ROLE_ADMIN;
+    }
+
+    public function pushDevices(): HasMany
+    {
+        return $this->hasMany(PushDevice::class);
+    }
+
+    public function hasTransactionPin(): bool
+    {
+        return $this->pin_hash !== null;
+    }
+
+    /**
+     * fpuid and `name` are both derived — assigned here so every creation
+     * path (registration, factories, seeders, tinker) gets them for free
+     * instead of relying on each caller to remember.
+     */
+    protected static function booted(): void
+    {
+        static::saving(function (self $user): void {
+            if ($user->isDirty(['first_name', 'last_name'])) {
+                $user->name = trim("{$user->first_name} {$user->last_name}");
+            }
+        });
+
+        static::created(function (self $user): void {
+            if ($user->fpuid === null) {
+                $user->forceFill(['fpuid' => sprintf('FP%08d', $user->id)])->saveQuietly();
+            }
+        });
     }
 }

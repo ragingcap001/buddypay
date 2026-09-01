@@ -10,7 +10,10 @@ use Symfony\Component\HttpFoundation\Response;
 
 /**
  * Sensitive-operation authentication: financial mutations require the
- * user's transaction PIN via the X-Transaction-Pin header.
+ * user's transaction PIN, via either the X-Transaction-Pin header (the
+ * original internal API) or a `pin` field in the request body (the
+ * mobile contract's purchase payloads send it there instead). The header
+ * wins if both are present.
  */
 class RequirePin
 {
@@ -26,10 +29,10 @@ class RequirePin
             return ApiResponse::error('UNAUTHENTICATED', 'Unauthenticated.', 401, $request);
         }
 
-        $pin = (string) $request->header('X-Transaction-Pin', '');
+        $pin = (string) $request->header('X-Transaction-Pin', (string) $request->input('pin', ''));
 
         if ($pin === '') {
-            return ApiResponse::error('PIN_REQUIRED', 'The X-Transaction-Pin header is required for this operation.', 400, $request);
+            return ApiResponse::error('PIN_REQUIRED', 'A transaction PIN is required for this operation.', 400, $request);
         }
 
         if (! $this->pins->verify($user, $pin)) {

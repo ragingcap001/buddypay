@@ -2,9 +2,14 @@
 
 namespace App\Domain\Providers\Services;
 
+use App\Domain\GiftCards\DTOs\GiftCardPurchaseRequest;
+use App\Domain\GiftCards\DTOs\GiftCardPurchaseResponse;
 use App\Domain\Payments\DTOs\PaymentChargeRequest;
 use App\Domain\Payments\DTOs\PaymentChargeResponse;
 use App\Domain\Payments\DTOs\PaymentVerificationResponse;
+use App\Domain\Payments\DTOs\PayoutRequest;
+use App\Domain\Payments\DTOs\PayoutResponse;
+use App\Domain\Payments\DTOs\PayoutVerificationResponse;
 use App\Domain\Providers\DTOs\BillPurchaseRequest;
 use App\Domain\Providers\DTOs\BillPurchaseResponse;
 use App\Domain\Providers\DTOs\BillValidationRequest;
@@ -112,6 +117,50 @@ final class ProviderGateway
         return $response;
     }
 
+    /**
+     * Same audit/circuit-breaker/outcome-classification funnel as
+     * purchaseBill() — a gift card purchase is not itself a "bill", so it
+     * gets its own DTOs, but the same funnel discipline applies.
+     */
+    public function purchaseGiftCard(string $providerName, GiftCardPurchaseRequest $request, ?Transaction $transaction = null): GiftCardPurchaseResponse
+    {
+        $provider = $this->providerModel($providerName);
+
+        if (! $this->circuitBreaker->allowRequest($providerName)) {
+            throw new CircuitOpenException($providerName);
+        }
+
+        $startedAt = microtime(true);
+        $outcome = ProviderOutcome::Ambiguous;
+        $response = null;
+        $error = null;
+
+        try {
+            $giftCardProvider = $this->factory->makeGiftCardProvider($providerName);
+            $response = $giftCardProvider->purchase($request);
+            $outcome = $response->outcome;
+        } catch (Throwable $e) {
+            $outcome = $this->classifier->classifyException($e);
+            $error = $e->getMessage();
+        }
+
+        $this->recordAttempt($provider, $transaction, 'GIFT_CARD_PURCHASE', $outcome, $error, (int) ((microtime(true) - $startedAt) * 1000));
+        $this->updateCircuit($providerName, $outcome);
+
+        if ($response === null) {
+            return new GiftCardPurchaseResponse($outcome, null, $error ?? 'Provider call failed without a response');
+        }
+
+        return $response;
+    }
+
+    public function verifyGiftCard(string $providerName, string $transactionReference): GiftCardPurchaseResponse
+    {
+        $this->providerModel($providerName);
+
+        return $this->factory->makeGiftCardProvider($providerName)->verifyByReference($transactionReference);
+    }
+
     public function verifyBill(BillVerificationRequest $request): BillVerificationResponse
     {
         $this->providerModel($request->providerName);
@@ -157,6 +206,51 @@ final class ProviderGateway
     {
         $this->providerModel($providerName);
         $provider = $this->factory->makePaymentProvider($providerName);
+
+        return $provider->verify($providerReference);
+    }
+
+    /**
+     * Initiate a wallet -> bank payout through a payout provider. Same
+     * audit/circuit-breaker/outcome-classification funnel as `charge()`.
+     */
+    public function payout(string $providerName, PayoutRequest $request, ?Transaction $transaction = null): PayoutResponse
+    {
+        $provider = $this->providerModel($providerName);
+
+        if (! $this->circuitBreaker->allowRequest($providerName)) {
+            throw new CircuitOpenException($providerName);
+        }
+
+        $startedAt = microtime(true);
+        $outcome = ProviderOutcome::Ambiguous;
+        $response = null;
+        $error = null;
+
+        try {
+            $payoutProvider = $this->factory->makePayoutProvider($providerName);
+
+            $response = $payoutProvider->payout($request);
+            $outcome = $response->outcome;
+        } catch (Throwable $e) {
+            $outcome = $this->classifier->classifyException($e);
+            $error = $e->getMessage();
+        }
+
+        $this->recordAttempt($provider, $transaction, 'PAYOUT', $outcome, $error, (int) ((microtime(true) - $startedAt) * 1000));
+        $this->updateCircuit($providerName, $outcome);
+
+        if ($response === null) {
+            return new PayoutResponse($outcome, null, $error ?? 'Payout provider call failed without a response');
+        }
+
+        return $response;
+    }
+
+    public function verifyPayout(string $providerName, string $providerReference): PayoutVerificationResponse
+    {
+        $this->providerModel($providerName);
+        $provider = $this->factory->makePayoutProvider($providerName);
 
         return $provider->verify($providerReference);
     }

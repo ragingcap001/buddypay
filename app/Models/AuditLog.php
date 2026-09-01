@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Model;
 /**
  * Append-only audit log. Rows are never updated or deleted.
  */
